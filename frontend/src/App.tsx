@@ -1,42 +1,85 @@
 import { useEffect, useState } from 'react'
 import './App.css'
+import { getDataset, type DatasetMeta } from './api'
+import { DatasetImport } from './components/DatasetImport'
+import { DataPreview } from './components/DataPreview'
+import { VariableEditor } from './components/VariableEditor'
 
-type HealthStatus = 'checking' | 'online' | 'offline'
+type Tab = 'variables' | 'data'
 
 function App() {
-  const [status, setStatus] = useState<HealthStatus>('checking')
-  const [service, setService] = useState<string>('')
+  const [datasetId, setDatasetId] = useState<string | null>(null)
+  const [meta, setMeta] = useState<DatasetMeta | null>(null)
+  const [tab, setTab] = useState<Tab>('variables')
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/health')
-      .then((res) => {
-        if (!res.ok) throw new Error('Bad response')
-        return res.json()
-      })
-      .then((data: { status: string; service: string }) => {
-        setStatus('online')
-        setService(data.service)
-      })
-      .catch(() => setStatus('offline'))
-  }, [])
+    if (!datasetId) {
+      setMeta(null)
+      return
+    }
+    getDataset(datasetId)
+      .then(setMeta)
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Failed to load dataset'),
+      )
+  }, [datasetId])
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem' }}>
-      <h1>StatsTool</h1>
-      <p>Quant research statistical analysis tool.</p>
-      <p>
-        Backend status:{' '}
-        {status === 'checking' && <span>checking…</span>}
-        {status === 'online' && (
-          <strong style={{ color: 'green' }}>online ({service})</strong>
+    <div className="app">
+      <header className="app-header">
+        <h1
+          onClick={() => setDatasetId(null)}
+          style={{ cursor: 'pointer' }}
+          title="Back to datasets"
+        >
+          StatsTool
+        </h1>
+        {meta && (
+          <span className="muted">
+            {meta.source_filename} · {meta.n_rows} rows · {meta.n_cols} columns
+          </span>
         )}
-        {status === 'offline' && (
-          <strong style={{ color: 'crimson' }}>
-            offline — is the backend running?
-          </strong>
-        )}
-      </p>
-    </main>
+      </header>
+
+      {error && <p className="error">{error}</p>}
+
+      {!datasetId && (
+        <DatasetImport
+          onOpen={(id) => {
+            setError(null)
+            setTab('variables')
+            setDatasetId(id)
+          }}
+        />
+      )}
+
+      {datasetId && meta && (
+        <div className="panel">
+          <div className="tabs">
+            <button
+              className={tab === 'variables' ? 'tab active' : 'tab'}
+              onClick={() => setTab('variables')}
+            >
+              Variables
+            </button>
+            <button
+              className={tab === 'data' ? 'tab active' : 'tab'}
+              onClick={() => setTab('data')}
+            >
+              Data
+            </button>
+            <span className="spacer" />
+            <button onClick={() => setDatasetId(null)}>← Datasets</button>
+          </div>
+
+          {tab === 'variables' && (
+            <VariableEditor meta={meta} onSaved={setMeta} />
+          )}
+          {tab === 'data' && <DataPreview datasetId={meta.id} />}
+        </div>
+      )}
+    </div>
   )
 }
 
