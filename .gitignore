@@ -1,0 +1,27 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Environment / secrets
+.env
+*.local
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
+
+# Project data (uploaded datasets, saved projects) — keep out of git for now
+data/
+*.sav
+*.csv
+!sample*.csv
