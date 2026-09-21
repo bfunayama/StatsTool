@@ -74,7 +74,7 @@ function App() {
           </div>
 
           {tab === 'variables' && (
-            <VariableEditor meta={meta} onSaved={setMeta} />
+            <VariableEditor meta={meta} onChanged={setMeta} />
           )}
           {tab === 'data' && <DataPreview datasetId={meta.id} />}
         </div>

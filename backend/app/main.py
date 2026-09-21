@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
-import math
+import copy
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import ingest, storage
+from . import compute, ingest, storage
 from .models import (
+    BandRecode,
+    BandRequest,
+    BinaryRecode,
+    BinaryRequest,
+    CopyRequest,
     DatasetMeta,
     DatasetSummary,
+    DistinctResponse,
+    DistinctValue,
     PreviewResponse,
+    Variable,
     VariablesUpdate,
+    VariableType,
 )
 
 app = FastAPI(title="StatsTool API", version="0.1.0")
@@ -70,56 +79,202 @@ async def upload_dataset(file: UploadFile) -> DatasetMeta:
 @app.get("/api/datasets/{dataset_id}", response_model=DatasetMeta)
 def get_dataset(dataset_id: str) -> DatasetMeta:
     """Return a dataset's metadata (variables, labels, types)."""
-    if not storage.dataset_exists(dataset_id):
-        raise HTTPException(status_code=404, detail="Dataset not found.")
-    return storage.load_meta(dataset_id)
+    meta, _ = _load(dataset_id)
+    return meta
 
 
 @app.put("/api/datasets/{dataset_id}/variables", response_model=DatasetMeta)
 def update_variables(dataset_id: str, payload: VariablesUpdate) -> DatasetMeta:
-    """Save edited variable metadata (labels, types, value labels)."""
-    if not storage.dataset_exists(dataset_id):
-        raise HTTPException(status_code=404, detail="Dataset not found.")
-
-    meta = storage.load_meta(dataset_id)
-    known = {v.name for v in meta.variables}
-    incoming = {v.name for v in payload.variables}
-    if incoming != known:
-        raise HTTPException(
-            status_code=400,
-            detail="Variable list must match the dataset's columns.",
-        )
-
+    """Save edited variable metadata (labels, types, values, recodes)."""
+    meta, df = _load(dataset_id)
+    _validate_variables(payload.variables, df)
     meta.variables = payload.variables
     storage.save_meta(meta)
     return meta
 
 
+@app.post("/api/datasets/{dataset_id}/variables/copy", response_model=DatasetMeta)
+def copy_variable(dataset_id: str, payload: CopyRequest) -> DatasetMeta:
+    """Duplicate a variable into a new, independently editable one."""
+    meta, df = _load(dataset_id)
+    src = _require_variable(meta, payload.source_variable)
+    existing = {v.name for v in meta.variables}
+
+    if src.values:
+        values = copy.deepcopy(src.values)
+    else:
+        underlying = compute.compute_display_series(
+            df, compute.build_index(meta.variables), src
+        )
+        pairs, _, _, _ = compute.distinct_values(underlying)
+        values = compute.seed_value_attributes(underlying) if len(pairs) <= 200 else []
+
+    new_var = Variable(
+        name=compute.unique_name(f"{src.name}_copy", existing),
+        label=payload.new_label or f"{src.label} (copy)",
+        type=src.type,
+        source_name=src.name,
+        values=values,
+    )
+    meta.variables.append(new_var)
+    storage.save_meta(meta)
+    return meta
+
+
+@app.post("/api/datasets/{dataset_id}/variables/band", response_model=DatasetMeta)
+def band_variable(dataset_id: str, payload: BandRequest) -> DatasetMeta:
+    """Create a banded (ranged) variable from a numeric source."""
+    meta, _ = _load(dataset_id)
+    src = _require_variable(meta, payload.source_variable)
+    if not payload.bands:
+        raise HTTPException(status_code=400, detail="Provide at least one band.")
+
+    recode = BandRecode(bands=payload.bands)
+    existing = {v.name for v in meta.variables}
+    new_var = Variable(
+        name=compute.unique_name(f"{src.name}_band", existing),
+        label=payload.new_label or f"{src.label} (banded)",
+        type=VariableType.categorical,
+        source_name=src.name,
+        values=compute.band_value_attributes(payload.bands),
+        recode=recode,
+    )
+    meta.variables.append(new_var)
+    storage.save_meta(meta)
+    return meta
+
+
+@app.post("/api/datasets/{dataset_id}/variables/binary", response_model=DatasetMeta)
+def binary_variable(dataset_id: str, payload: BinaryRequest) -> DatasetMeta:
+    """Create a binary variable by choosing which values count as True."""
+    meta, _ = _load(dataset_id)
+    src = _require_variable(meta, payload.source_variable)
+    if not payload.true_values:
+        raise HTTPException(status_code=400, detail="Select at least one True value.")
+
+    recode = BinaryRecode(
+        true_values=payload.true_values,
+        true_label=payload.true_label,
+        false_label=payload.false_label,
+    )
+    existing = {v.name for v in meta.variables}
+    new_var = Variable(
+        name=compute.unique_name(f"{src.name}_binary", existing),
+        label=payload.new_label or f"{src.label} ({payload.true_label})",
+        type=VariableType.binary,
+        source_name=src.name,
+        values=compute.binary_value_attributes(recode),
+        recode=recode,
+    )
+    meta.variables.append(new_var)
+    storage.save_meta(meta)
+    return meta
+
+
+@app.delete("/api/datasets/{dataset_id}/variables/{name}", response_model=DatasetMeta)
+def delete_variable(dataset_id: str, name: str) -> DatasetMeta:
+    """Delete a derived variable (raw imported columns cannot be deleted)."""
+    meta, _ = _load(dataset_id)
+    target = _require_variable(meta, name)
+    if target.source_name is None:
+        raise HTTPException(
+            status_code=400, detail="Imported columns cannot be deleted."
+        )
+    dependents = [v.name for v in meta.variables if v.source_name == name]
+    if dependents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Used by other variables: {', '.join(dependents)}.",
+        )
+    meta.variables = [v for v in meta.variables if v.name != name]
+    storage.save_meta(meta)
+    return meta
+
+
+@app.get(
+    "/api/datasets/{dataset_id}/variables/{name}/distinct",
+    response_model=DistinctResponse,
+)
+def distinct_variable(dataset_id: str, name: str) -> DistinctResponse:
+    """List a variable's distinct values, to build recode editors."""
+    meta, df = _load(dataset_id)
+    var = _require_variable(meta, name)
+    series = compute.compute_display_series(df, compute.build_index(meta.variables), var)
+    pairs, numeric, vmin, vmax = compute.distinct_values(series)
+    return DistinctResponse(
+        values=[DistinctValue(value=v, count=c) for v, c in pairs],
+        numeric=numeric,
+        min=vmin,
+        max=vmax,
+    )
+
+
 @app.get("/api/datasets/{dataset_id}/preview", response_model=PreviewResponse)
 def preview_dataset(dataset_id: str, limit: int = 50) -> PreviewResponse:
-    """Return the first `limit` rows for previewing the data."""
-    if not storage.dataset_exists(dataset_id):
-        raise HTTPException(status_code=404, detail="Dataset not found.")
-
+    """Return the first `limit` rows with labels/recodes applied."""
+    meta, df = _load(dataset_id)
     limit = max(1, min(limit, 500))
-    df = storage.load_data(dataset_id)
-    head = df.head(limit)
-    rows = [_clean_row(row) for row in head.to_dict(orient="records")]
+    display = _display_frame(df.head(limit), meta)
+    rows = [_clean_row(row) for row in display.to_dict(orient="records")]
     return PreviewResponse(
-        columns=[str(c) for c in df.columns],
+        columns=[v.name for v in meta.variables],
         rows=rows,
         total_rows=int(df.shape[0]),
     )
+
+
+def _load(dataset_id: str) -> tuple[DatasetMeta, pd.DataFrame]:
+    if not storage.dataset_exists(dataset_id):
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    return storage.load_meta(dataset_id), storage.load_data(dataset_id)
+
+
+def _require_variable(meta: DatasetMeta, name: str) -> Variable:
+    for var in meta.variables:
+        if var.name == name:
+            return var
+    raise HTTPException(status_code=404, detail=f"Variable not found: {name}")
+
+
+def _validate_variables(variables: list[Variable], df: pd.DataFrame) -> None:
+    names = [v.name for v in variables]
+    if len(names) != len(set(names)):
+        raise HTTPException(status_code=400, detail="Duplicate variable names.")
+
+    raw_columns = {str(c) for c in df.columns}
+    raw_names = {v.name for v in variables if v.source_name is None}
+    if raw_names != raw_columns:
+        raise HTTPException(
+            status_code=400,
+            detail="Every imported column must be present exactly once.",
+        )
+    name_set = set(names)
+    for var in variables:
+        if var.source_name is not None and var.source_name not in name_set:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{var.name} refers to a missing source: {var.source_name}.",
+            )
+
+
+def _display_frame(df: pd.DataFrame, meta: DatasetMeta) -> pd.DataFrame:
+    index = compute.build_index(meta.variables)
+    data = {v.name: compute.compute_display_series(df, index, v) for v in meta.variables}
+    return pd.DataFrame(data)
 
 
 def _clean_row(row: dict) -> dict:
     """Convert pandas/NaN values into JSON-serialisable equivalents."""
     cleaned: dict = {}
     for key, value in row.items():
-        if value is None or (isinstance(value, float) and math.isnan(value)):
-            cleaned[str(key)] = None
-        elif isinstance(value, pd.Timestamp):
+        if isinstance(value, pd.Timestamp):
             cleaned[str(key)] = value.isoformat()
-        else:
-            cleaned[str(key)] = value
+            continue
+        try:
+            if pd.isna(value):
+                cleaned[str(key)] = None
+                continue
+        except (TypeError, ValueError):
+            pass
+        cleaned[str(key)] = value
     return cleaned

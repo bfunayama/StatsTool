@@ -12,7 +12,8 @@ import io
 
 import pandas as pd
 
-from .models import ValueLabel, Variable, VariableType
+from .compute import seed_value_attributes
+from .models import Variable, VariableType
 
 # A column is treated as categorical only if it has at most this many distinct
 # values; above this it is considered free text.
@@ -103,15 +104,14 @@ def infer_variable(name: str, series: pd.Series) -> Variable:
     if _looks_datetime(values):
         return Variable(name=name, label=name, type=VariableType.datetime)
 
-    distinct = sorted(values.unique())
+    distinct = values.unique()
     if len(distinct) <= MAX_CATEGORIES:
-        # Seed value labels as code -> code so the user can rename them later.
-        value_labels = [ValueLabel(value=v, label=v) for v in distinct]
+        # Seed value attributes so the user can rename labels and set values.
         return Variable(
             name=name,
             label=name,
             type=VariableType.categorical,
-            value_labels=value_labels,
+            values=seed_value_attributes(series),
         )
 
     return Variable(name=name, label=name, type=VariableType.text)
