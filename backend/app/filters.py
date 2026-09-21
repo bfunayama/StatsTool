@@ -79,9 +79,28 @@ def evaluate_filter(
     index: dict[str, Variable],
     filt: Filter,
 ) -> pd.Series:
-    """Return a boolean Series marking rows the filter selects."""
+    """Return a boolean Series marking rows the filter selects.
+
+    Conditions join left to right via each condition's `connector` ("and"/"or"),
+    with AND binding tighter than OR, so "X or Y and Z" means "X or (Y and Z)".
+    Older filters without connectors fall back to the whole-filter `match`.
+    """
     if not filt.conditions:
         return pd.Series(True, index=df.index)
+
+    default = "and" if filt.match == "all" else "or"
     masks = [evaluate_condition(df, index, c) for c in filt.conditions]
-    combine = (lambda a, b: a & b) if filt.match == "all" else (lambda a, b: a | b)
-    return reduce(combine, masks).fillna(False)
+
+    # Group consecutive AND-joined masks, then OR the groups together.
+    or_terms: list[pd.Series] = []
+    current = masks[0]
+    for condition, mask in zip(filt.conditions[1:], masks[1:]):
+        connector = condition.connector or default
+        if connector == "or":
+            or_terms.append(current)
+            current = mask
+        else:
+            current = current & mask
+    or_terms.append(current)
+
+    return reduce(lambda a, b: a | b, or_terms).fillna(False)

@@ -72,6 +72,7 @@ export interface Condition {
   values: string[]
   number: number | null
   number2: number | null
+  connector?: 'and' | 'or'
 }
 
 export interface Filter {

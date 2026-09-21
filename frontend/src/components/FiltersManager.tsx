@@ -32,12 +32,12 @@ const CATEGORY_OPS: Operator[] = ['in', 'not_in', 'is_missing', 'not_missing']
 const OP_LABEL: Record<Operator, string> = {
   in: 'is any of',
   not_in: 'is not any of',
-  eq: '=',
-  ne: '≠',
-  lt: '<',
-  le: '≤',
-  gt: '>',
-  ge: '≥',
+  eq: 'equals',
+  ne: 'does not equal',
+  lt: 'less than',
+  le: 'less than or equal to',
+  gt: 'greater than',
+  ge: 'greater than or equal to',
   between: 'between',
   is_missing: 'is missing',
   not_missing: 'is not missing',
@@ -189,6 +189,7 @@ function FilterEditor({
         values: [],
         number: null,
         number2: null,
+        connector: 'and',
       },
     ])
   }
@@ -217,42 +218,68 @@ function FilterEditor({
         </button>
       </div>
 
-      <div className="match-row">
-        <span>Respondents must match</span>
-        <label>
-          <input
-            type="radio"
-            checked={draft.match === 'all'}
-            onChange={() => setDraft({ ...draft, match: 'all' })}
-          />
-          all conditions (AND)
-        </label>
-        <label>
-          <input
-            type="radio"
-            checked={draft.match === 'any'}
-            onChange={() => setDraft({ ...draft, match: 'any' })}
-          />
-          any condition (OR)
-        </label>
-      </div>
+      {draft.conditions.length > 1 && (
+        <p className="muted">
+          Choose AND or OR between each condition. AND is applied before OR, so
+          “A OR B AND C” means “A OR (B AND C)”.
+        </p>
+      )}
 
       {draft.conditions.map((c, i) => (
-        <ConditionRow
-          key={i}
-          meta={meta}
-          condition={c}
-          onChange={(patch) =>
-            setConditions(
-              draft.conditions.map((x, idx) =>
-                idx === i ? { ...x, ...patch } : x,
-              ),
-            )
-          }
-          onRemove={() =>
-            setConditions(draft.conditions.filter((_, idx) => idx !== i))
-          }
-        />
+        <div key={i}>
+          {i > 0 && (
+            <div className="connector-row">
+              <button
+                type="button"
+                className={
+                  (c.connector ?? 'and') === 'and'
+                    ? 'connector active'
+                    : 'connector'
+                }
+                onClick={() =>
+                  setConditions(
+                    draft.conditions.map((x, idx) =>
+                      idx === i ? { ...x, connector: 'and' } : x,
+                    ),
+                  )
+                }
+              >
+                AND
+              </button>
+              <button
+                type="button"
+                className={
+                  (c.connector ?? 'and') === 'or'
+                    ? 'connector active'
+                    : 'connector'
+                }
+                onClick={() =>
+                  setConditions(
+                    draft.conditions.map((x, idx) =>
+                      idx === i ? { ...x, connector: 'or' } : x,
+                    ),
+                  )
+                }
+              >
+                OR
+              </button>
+            </div>
+          )}
+          <ConditionRow
+            meta={meta}
+            condition={c}
+            onChange={(patch) =>
+              setConditions(
+                draft.conditions.map((x, idx) =>
+                  idx === i ? { ...x, ...patch } : x,
+                ),
+              )
+            }
+            onRemove={() =>
+              setConditions(draft.conditions.filter((_, idx) => idx !== i))
+            }
+          />
+        </div>
       ))}
       <button onClick={addCondition}>+ Add condition</button>
     </div>

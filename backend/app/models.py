@@ -189,6 +189,9 @@ class Condition(BaseModel):
     values: list[str] = Field(default_factory=list)  # for in / not_in
     number: float | None = None  # for eq..ge, and lower bound of between
     number2: float | None = None  # upper bound of between
+    # How this condition joins to the previous one. Ignored on the first
+    # condition. None on older saved filters, which fall back to Filter.match.
+    connector: Literal["and", "or"] | None = None
 
 
 class Filter(BaseModel):
