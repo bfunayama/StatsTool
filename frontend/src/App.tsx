@@ -3,14 +3,16 @@ import './App.css'
 import { getDataset, type DatasetMeta } from './api'
 import { DatasetImport } from './components/DatasetImport'
 import { DataPreview } from './components/DataPreview'
+import { FiltersManager } from './components/FiltersManager'
 import { VariableEditor } from './components/VariableEditor'
 
-type Tab = 'variables' | 'data'
+type Tab = 'variables' | 'filters' | 'data'
 
 function App() {
   const [datasetId, setDatasetId] = useState<string | null>(null)
   const [meta, setMeta] = useState<DatasetMeta | null>(null)
   const [tab, setTab] = useState<Tab>('variables')
+  const [dataFilter, setDataFilter] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -64,19 +66,46 @@ function App() {
               Variables
             </button>
             <button
+              className={tab === 'filters' ? 'tab active' : 'tab'}
+              onClick={() => setTab('filters')}
+            >
+              Filters
+            </button>
+            <button
               className={tab === 'data' ? 'tab active' : 'tab'}
               onClick={() => setTab('data')}
             >
               Data
             </button>
             <span className="spacer" />
+            {tab === 'data' && meta.filters.length > 0 && (
+              <label className="muted" style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                Filter:
+                <select
+                  value={dataFilter}
+                  onChange={(e) => setDataFilter(e.target.value)}
+                >
+                  <option value="">None (all respondents)</option>
+                  {meta.filters.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button onClick={() => setDatasetId(null)}>← Datasets</button>
           </div>
 
           {tab === 'variables' && (
             <VariableEditor meta={meta} onChanged={setMeta} />
           )}
-          {tab === 'data' && <DataPreview datasetId={meta.id} />}
+          {tab === 'filters' && (
+            <FiltersManager meta={meta} onChanged={setMeta} />
+          )}
+          {tab === 'data' && (
+            <DataPreview datasetId={meta.id} filterId={dataFilter || undefined} />
+          )}
         </div>
       )}
     </div>

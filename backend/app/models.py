@@ -98,6 +98,7 @@ class DatasetMeta(BaseModel):
     n_rows: int
     n_cols: int
     variables: list[Variable]
+    filters: list["Filter"] = Field(default_factory=list)
 
 
 class DatasetSummary(BaseModel):
@@ -162,3 +163,55 @@ class BinaryRequest(BaseModel):
     true_values: list[str]
     true_label: str = "Selected"
     false_label: str = "Not selected"
+
+
+class Operator(str, Enum):
+    """Comparison used by a filter condition."""
+
+    is_in = "in"  # value is one of `values`
+    not_in = "not_in"  # value is not one of `values`
+    eq = "eq"
+    ne = "ne"
+    lt = "lt"
+    le = "le"
+    gt = "gt"
+    ge = "ge"
+    between = "between"  # number <= x <= number2
+    is_missing = "is_missing"
+    not_missing = "not_missing"
+
+
+class Condition(BaseModel):
+    """A single test on one variable within a filter."""
+
+    variable: str
+    operator: Operator
+    values: list[str] = Field(default_factory=list)  # for in / not_in
+    number: float | None = None  # for eq..ge, and lower bound of between
+    number2: float | None = None  # upper bound of between
+
+
+class Filter(BaseModel):
+    """A named, reusable subset of respondents."""
+
+    id: str
+    name: str
+    match: Literal["all", "any"] = "all"
+    conditions: list[Condition] = Field(default_factory=list)
+
+
+class FiltersUpdate(BaseModel):
+    """Payload for saving the dataset's filters."""
+
+    filters: list[Filter]
+
+
+class FilterCountResponse(BaseModel):
+    """How many respondents a filter selects."""
+
+    count: int
+    total: int
+
+
+# DatasetMeta references Filter before it is defined; resolve the forward ref.
+DatasetMeta.model_rebuild()

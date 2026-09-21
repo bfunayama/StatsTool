@@ -237,3 +237,39 @@ button.danger:hover:not(:disabled) {
   gap: 0.25rem;
   color: var(--text-muted);
 }
+
+.match-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.5rem 0 1rem;
+  flex-wrap: wrap;
+}
+.match-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.condition {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem;
+  margin-bottom: 0.6rem;
+  background: var(--row-alt);
+}
+.condition-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.condition-head select {
+  max-width: 18rem;
+}
+.condition-head input[type='number'] {
+  width: 7rem;
+}
+.condition .checkbox-list {
+  margin-top: 0.5rem;
+  background: #fff;
+}

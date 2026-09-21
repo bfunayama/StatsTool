@@ -8,7 +8,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import compute, ingest, storage
+from . import compute, filters as filtering, ingest, storage
 from .models import (
     BandRecode,
     BandRequest,
@@ -19,6 +19,9 @@ from .models import (
     DatasetSummary,
     DistinctResponse,
     DistinctValue,
+    Filter,
+    FilterCountResponse,
+    FiltersUpdate,
     PreviewResponse,
     Variable,
     VariablesUpdate,
@@ -209,11 +212,55 @@ def distinct_variable(dataset_id: str, name: str) -> DistinctResponse:
     )
 
 
+@app.put("/api/datasets/{dataset_id}/filters", response_model=DatasetMeta)
+def update_filters(dataset_id: str, payload: FiltersUpdate) -> DatasetMeta:
+    """Save the dataset's reusable filters."""
+    meta, _ = _load(dataset_id)
+    names = {v.name for v in meta.variables}
+    ids = [f.id for f in payload.filters]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(status_code=400, detail="Duplicate filter ids.")
+    for filt in payload.filters:
+        for cond in filt.conditions:
+            if cond.variable not in names:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Filter '{filt.name}' uses unknown variable {cond.variable}.",
+                )
+    meta.filters = payload.filters
+    storage.save_meta(meta)
+    return meta
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/filter-count", response_model=FilterCountResponse
+)
+def filter_count(dataset_id: str, filt: Filter) -> FilterCountResponse:
+    """Count how many respondents an (unsaved) filter selects, for live feedback."""
+    meta, df = _load(dataset_id)
+    index = compute.build_index(meta.variables)
+    mask = filtering.evaluate_filter(df, index, filt)
+    return FilterCountResponse(count=int(mask.sum()), total=int(df.shape[0]))
+
+
 @app.get("/api/datasets/{dataset_id}/preview", response_model=PreviewResponse)
-def preview_dataset(dataset_id: str, limit: int = 50) -> PreviewResponse:
-    """Return the first `limit` rows with labels/recodes applied."""
+def preview_dataset(
+    dataset_id: str, limit: int = 50, filter: str | None = None
+) -> PreviewResponse:
+    """Return the first `limit` rows with labels/recodes applied.
+
+    When `filter` names a saved filter id, only matching respondents are shown.
+    """
     meta, df = _load(dataset_id)
     limit = max(1, min(limit, 500))
+
+    if filter:
+        saved = next((f for f in meta.filters if f.id == filter), None)
+        if saved is None:
+            raise HTTPException(status_code=404, detail="Filter not found.")
+        mask = filtering.evaluate_filter(df, compute.build_index(meta.variables), saved)
+        df = df[mask]
+
     display = _display_frame(df.head(limit), meta)
     rows = [_clean_row(row) for row in display.to_dict(orient="records")]
     return PreviewResponse(

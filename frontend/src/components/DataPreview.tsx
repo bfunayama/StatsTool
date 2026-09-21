@@ -3,21 +3,22 @@ import { getPreview, type PreviewResponse } from '../api'
 
 interface Props {
   datasetId: string
+  filterId?: string
 }
 
-export function DataPreview({ datasetId }: Props) {
+export function DataPreview({ datasetId, filterId }: Props) {
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     setPreview(null)
     setError(null)
-    getPreview(datasetId, 50)
+    getPreview(datasetId, 50, filterId)
       .then(setPreview)
       .catch((err) =>
         setError(err instanceof Error ? err.message : 'Failed to load preview'),
       )
-  }, [datasetId])
+  }, [datasetId, filterId])
 
   if (error) return <p className="error">{error}</p>
   if (!preview) return <p className="muted">Loading preview…</p>

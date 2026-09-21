@@ -50,6 +50,40 @@ export interface DatasetMeta {
   n_rows: number
   n_cols: number
   variables: Variable[]
+  filters: Filter[]
+}
+
+export type Operator =
+  | 'in'
+  | 'not_in'
+  | 'eq'
+  | 'ne'
+  | 'lt'
+  | 'le'
+  | 'gt'
+  | 'ge'
+  | 'between'
+  | 'is_missing'
+  | 'not_missing'
+
+export interface Condition {
+  variable: string
+  operator: Operator
+  values: string[]
+  number: number | null
+  number2: number | null
+}
+
+export interface Filter {
+  id: string
+  name: string
+  match: 'all' | 'any'
+  conditions: Condition[]
+}
+
+export interface FilterCountResponse {
+  count: number
+  total: number
 }
 
 export interface DatasetSummary {
@@ -126,10 +160,34 @@ export function updateVariables(
   }).then(handle<DatasetMeta>)
 }
 
-export function getPreview(id: string, limit = 50): Promise<PreviewResponse> {
-  return fetch(`/api/datasets/${id}/preview?limit=${limit}`).then(
+export function getPreview(
+  id: string,
+  limit = 50,
+  filterId?: string,
+): Promise<PreviewResponse> {
+  const query = new URLSearchParams({ limit: String(limit) })
+  if (filterId) query.set('filter', filterId)
+  return fetch(`/api/datasets/${id}/preview?${query.toString()}`).then(
     handle<PreviewResponse>,
   )
+}
+
+export function saveFilters(
+  id: string,
+  filters: Filter[],
+): Promise<DatasetMeta> {
+  return fetch(`/api/datasets/${id}/filters`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filters }),
+  }).then(handle<DatasetMeta>)
+}
+
+export function filterCount(
+  id: string,
+  filter: Filter,
+): Promise<FilterCountResponse> {
+  return postJson(`/api/datasets/${id}/filter-count`, filter)
 }
 
 export function getDistinct(
