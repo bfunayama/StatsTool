@@ -23,7 +23,7 @@ interface Props {
 
 // Statistics the user can toggle. All are derived from cell counts + bases.
 type CellStat = 'count' | 'col_pct' | 'row_pct' | 'total_pct'
-type SummaryRowStat = 'base_n' | 'total_count' | 'total_sum' | 'mean'
+type SummaryRowStat = 'base_n' | 'eff_n' | 'total_count' | 'total_sum' | 'mean'
 type SummaryColStat = 'row_n'
 
 const CELL_STATS: { key: CellStat; label: string }[] = [
@@ -34,6 +34,7 @@ const CELL_STATS: { key: CellStat; label: string }[] = [
 ]
 const SUMMARY_ROW_STATS: { key: SummaryRowStat; label: string }[] = [
   { key: 'base_n', label: 'Base n' },
+  { key: 'eff_n', label: 'Effective n' },
   { key: 'total_count', label: 'Column n' },
   { key: 'total_sum', label: 'Total Sum' },
   { key: 'mean', label: 'Mean' },
@@ -54,6 +55,10 @@ function fmtPct(value: number | null): string {
 function fmtNumber(value: number | null): string {
   if (value === null) return ''
   return Number.isInteger(value) ? `${value}` : value.toFixed(2)
+}
+
+function fmtCount(value: number | null): string {
+  return value === null ? '' : `${Math.round(value)}`
 }
 
 // Encode a row choice as "v:<name>" (variable) or "q:<id>" (grouped variable).
@@ -110,7 +115,11 @@ function insertNode(
 
 export function CrosstabView({ meta, onChanged }: Props) {
   const memberless = useMemo(
-    () => meta.variables.filter((v) => !v.question_id),
+    () => meta.variables.filter((v) => !v.question_id && v.type !== 'weight'),
+    [meta.variables],
+  )
+  const weightVars = useMemo(
+    () => meta.variables.filter((v) => v.type === 'weight'),
     [meta.variables],
   )
   const multiQuestions = useMemo(
@@ -121,6 +130,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [rowValue, setRowValue] = useState('')
   const [colValue, setColValue] = useState('')
   const [filterId, setFilterId] = useState('')
+  const [weightId, setWeightId] = useState('')
   const [result, setResult] = useState<CrosstabResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -193,6 +203,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
       row,
       column: colValue === TOTAL ? null : colValue,
       filter_id: filterId || null,
+      weight: weightId || null,
       display: {
         cell_stats: CELL_STATS.filter((s) => cellStats.has(s.key)).map((s) => s.key),
         summary_rows: SUMMARY_ROW_STATS.filter((s) => summaryRows.has(s.key)).map(
@@ -215,6 +226,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setRowValue(encodeRow(spec.row))
     setColValue(spec.column ?? TOTAL)
     setFilterId(spec.filter_id ?? '')
+    setWeightId(spec.weight ?? '')
     setCellStats(new Set(spec.display.cell_stats as CellStat[]))
     setSummaryRows(new Set(spec.display.summary_rows as SummaryRowStat[]))
     setSummaryCols(new Set(spec.display.summary_cols as SummaryColStat[]))
@@ -342,6 +354,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
       row,
       column: colValue === TOTAL ? null : colValue,
       filterId: filterId || null,
+      weight: weightId || null,
       rowGroups,
       columnGroups,
     })
@@ -360,8 +373,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return () => {
       ignore = true
     }
-  }, [meta.id, rowValue, colValue, filterId, rowGroups, columnGroups])
-
+  }, [meta.id, rowValue, colValue, filterId, weightId, rowGroups, columnGroups])
   // Row/column totals derived from cell counts (used for row %, total %, margins).
   const margins = useMemo(() => {
     if (!result) return null
@@ -415,7 +427,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     for (const stat of CELL_STATS) {
       if (!cellStats.has(stat.key)) continue
       let text = ''
-      if (stat.key === 'count') text = `${count}`
+      if (stat.key === 'count') text = fmtCount(count)
       else if (stat.key === 'col_pct')
         text = fmtPct(colBase ? (count / colBase) * 100 : null)
       else if (stat.key === 'row_pct')
@@ -434,8 +446,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Value of a summary-row statistic for one banner column.
   function summaryRowValue(key: SummaryRowStat, ci: number): string {
     if (!margins || !result) return ''
-    if (key === 'base_n') return fmtNumber(result.columns[ci].base)
-    if (key === 'total_count') return fmtNumber(margins.colTotals[ci])
+    if (key === 'base_n') return fmtCount(result.columns[ci].base)
+    if (key === 'eff_n') {
+      const eff = result.columns[ci].eff_base
+      return fmtCount(eff ?? result.columns[ci].base)
+    }
+    if (key === 'total_count') return fmtCount(margins.colTotals[ci])
     if (key === 'total_sum') return fmtNumber(margins.colSums[ci])
     const valid = margins.colValidCounts[ci]
     return fmtNumber(valid ? margins.colSums[ci] / valid : null)
@@ -444,8 +460,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Overall value of a summary-row statistic (shown in the summary column).
   function summaryRowCorner(key: SummaryRowStat): string {
     if (!margins || !result) return ''
-    if (key === 'base_n') return fmtNumber(result.total_base)
-    if (key === 'total_count') return fmtNumber(margins.grandCount)
+    if (key === 'base_n') return fmtCount(result.total_base)
+    if (key === 'eff_n') return fmtCount(result.total_eff_base ?? result.total_base)
+    if (key === 'total_count') return fmtCount(margins.grandCount)
     if (key === 'total_sum') return fmtNumber(margins.grandSum)
     return fmtNumber(margins.grandMean)
   }
@@ -925,6 +942,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
               onChange={(e) => setTitleDraft(e.target.value)}
             />
           </label>
+          {weightId && (
+            <span className="badge ct-weighted" title="This table is weighted">
+              Weighted: {weightVars.find((w) => w.name === weightId)?.label ?? weightId}
+            </span>
+          )}
           {selectedNode ? (
             <>
               {dirty && <span className="muted">Unsaved changes</span>}
@@ -1005,6 +1027,17 @@ export function CrosstabView({ meta, onChanged }: Props) {
             {meta.filters.map((f) => (
               <option key={f.id} value={f.id}>
                 {f.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          Weight
+          <select value={weightId} onChange={(e) => setWeightId(e.target.value)}>
+            <option value="">Unweighted</option>
+            {weightVars.map((w) => (
+              <option key={w.name} value={w.name}>
+                {w.label}
               </option>
             ))}
           </select>
@@ -1256,6 +1289,36 @@ export function CrosstabView({ meta, onChanged }: Props) {
             </tbody>
           </table>
           </div>
+
+          <p className="ct-caption">
+            {result.weighted ? (
+              <>
+                Weighted
+                {weightId
+                  ? ` – ${
+                      weightVars.find((w) => w.name === weightId)?.label ??
+                      weightId
+                    }`
+                  : ''}
+                , Total sample = {fmtCount(result.total_base)}
+                {result.total_eff_base != null && (
+                  <>
+                    , Effective sample = {fmtCount(result.total_eff_base)},
+                    Weighting efficiency ={' '}
+                    {result.total_base
+                      ? (
+                          (result.total_eff_base / result.total_base) *
+                          100
+                        ).toFixed(1)
+                      : '0.0'}
+                    %
+                  </>
+                )}
+              </>
+            ) : (
+              <>Unweighted, Total sample = {fmtCount(result.total_base)}</>
+            )}
+          </p>
 
           {(rowGroups.length > 0 || columnGroups.length > 0) && (
             <div className="ct-groups-panel">

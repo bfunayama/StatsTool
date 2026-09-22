@@ -26,6 +26,7 @@ class VariableType(str, Enum):
     datetime = "datetime"
     text = "text"
     binary = "binary"
+    weight = "weight"  # a computed rim/rake weight (see WeightSpec)
 
 
 class ValueAttribute(BaseModel):
@@ -72,6 +73,35 @@ class BinaryRecode(BaseModel):
 Recode = Annotated[Union[BandRecode, BinaryRecode], Field(discriminator="kind")]
 
 
+class WeightCell(BaseModel):
+    """One target proportion within a rim.
+
+    ``values`` holds one display label per variable in the rim (length 1 for a
+    marginal rim, longer for an interlocked rim). ``percent`` is the target share.
+    """
+
+    values: list[str]
+    percent: float
+
+
+class WeightRim(BaseModel):
+    """A control the weights must match: a variable (marginal) or several
+    variables crossed (interlocked). ``missing`` chooses how blanks are treated.
+    """
+
+    id: str
+    variables: list[str]
+    missing: Literal["exclude", "category"] = "exclude"
+    cells: list[WeightCell] = Field(default_factory=list)
+
+
+class WeightSpec(BaseModel):
+    """Definition of a rim/rake weight: target proportions raked via IPF."""
+
+    rims: list[WeightRim] = Field(default_factory=list)
+    max_iter: int = 50
+
+
 class Variable(BaseModel):
     """A column plus its editable metadata.
 
@@ -90,6 +120,8 @@ class Variable(BaseModel):
     recode: Recode | None = None
     # Set when this column belongs to a detected matrix/grid question.
     question_id: str | None = None
+    # Set only for type == weight: how the rake weight is defined.
+    weighting: WeightSpec | None = None
 
 
 class QuestionKind(str, Enum):
@@ -214,6 +246,43 @@ class BinaryRequest(BaseModel):
     false_label: str = "Not selected"
 
 
+class WeightRequest(BaseModel):
+    """Create (or replace) a weight variable from a rim/rake definition."""
+
+    name: str | None = None  # None → create a new weight; else update this one
+    new_label: str
+    spec: WeightSpec
+
+
+class WeightPreview(BaseModel):
+    """Sample-size diagnostics for a candidate weight, without saving it."""
+
+    total_sample: float
+    effective_sample: float
+    efficiency: float  # effective / total, as a percentage
+
+
+class CombinationsRequest(BaseModel):
+    """Ask for the observed category combinations across some variables."""
+
+    variables: list[str]
+    include_missing: bool = False
+
+
+class Combination(BaseModel):
+    """One observed combination of category labels, with its sample share."""
+
+    values: list[str]
+    count: int
+    percent: float
+
+
+class CombinationsResponse(BaseModel):
+    """Observed combinations for building weight targets."""
+
+    combinations: list[Combination]
+
+
 class Operator(str, Enum):
     """Comparison used by a filter condition."""
 
@@ -299,6 +368,7 @@ class CrosstabRequest(BaseModel):
     row: CrosstabRowSpec
     column: str | None = None  # None → a single "Total" banner (whole sample)
     filter_id: str | None = None  # optional saved filter to restrict respondents
+    weight: str | None = None  # optional weight-variable name
     row_groups: list[CrosstabGroup] = Field(default_factory=list)
     column_groups: list[CrosstabGroup] = Field(default_factory=list)
 
@@ -315,6 +385,7 @@ class CrosstabColumn(BaseModel):
 
     label: str
     base: float
+    eff_base: float | None = None  # Kish effective sample size (weighted tables)
 
 
 class CrosstabResponse(BaseModel):
@@ -325,6 +396,8 @@ class CrosstabResponse(BaseModel):
     columns: list[CrosstabColumn]
     cells: list[list[CrosstabCell]]  # cells[row][column]
     total_base: float
+    total_eff_base: float | None = None  # overall Kish effective sample size
+    weighted: bool = False
     row_kind: Literal["variable", "multi", "grid", "grid2d"]
 
 
@@ -342,6 +415,7 @@ class SavedCrosstabSpec(BaseModel):
     row: CrosstabRowSpec
     column: str | None = None  # None → Total-sample table (no column)
     filter_id: str | None = None
+    weight: str | None = None
     display: CrosstabDisplay = Field(default_factory=CrosstabDisplay)
     row_groups: list[CrosstabGroup] = Field(default_factory=list)
     column_groups: list[CrosstabGroup] = Field(default_factory=list)

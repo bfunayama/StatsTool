@@ -113,6 +113,9 @@ def compute_display_series(
         raise ValueError(f"Circular variable reference at {var.name}")
     visited = visited | {var.name}
 
+    if var.type == VariableType.weight:
+        return compute_weights(df, index, var)
+
     if var.source_name is None:
         raw = _clean(df[var.name])
     else:
@@ -188,3 +191,128 @@ def unique_name(base: str, existing: set[str]) -> str:
 
 def default_derived_type(source_type: VariableType) -> VariableType:
     return source_type
+
+
+def effective_n(weights: pd.Series) -> float:
+    """Kish effective sample size: (Σw)² / Σw². Equals n when weights are equal."""
+    s1 = float(weights.sum())
+    s2 = float((weights**2).sum())
+    return (s1 * s1 / s2) if s2 > 0 else 0.0
+
+
+def _weight_series(df: pd.DataFrame, index: dict[str, Variable], name: str) -> pd.Series:
+    var = index.get(name)
+    series = (
+        compute_display_series(df, index, var)
+        if var is not None
+        else _clean(df[name])
+    )
+    return series.astype("string")
+
+
+def combinations(
+    df: pd.DataFrame,
+    index: dict[str, Variable],
+    variables: list[str],
+    include_missing: bool,
+) -> list[tuple[list[str], int]]:
+    """Observed category combinations across ``variables`` (for weight targets)."""
+    cols: list[pd.Series] = []
+    ranks: list[dict[str, int]] = []
+    for name in variables:
+        series = _weight_series(df, index, name)
+        if include_missing:
+            series = series.fillna("(Missing)")
+        cols.append(series)
+        order = label_order(index[name]) if name in index else None
+        ranks.append({label: i for i, label in enumerate(order)} if order else {})
+
+    frame = pd.concat(cols, axis=1)
+    frame.columns = [f"v{i}" for i in range(len(cols))]
+    if not include_missing:
+        frame = frame.dropna()
+    grouped = (
+        frame.groupby(list(frame.columns), dropna=False).size().reset_index(name="n")
+    )
+
+    rows: list[tuple[list[str], int]] = []
+    for _, row in grouped.iterrows():
+        values = [str(row[c]) for c in frame.columns]
+        rows.append((values, int(row["n"])))
+    rows.sort(
+        key=lambda item: tuple(
+            ranks[i].get(item[0][i], len(ranks[i])) for i in range(len(variables))
+        )
+        + tuple(item[0])
+    )
+    return rows
+
+
+def compute_weights(
+    df: pd.DataFrame,
+    index: dict[str, Variable],
+    weight_var: Variable,
+) -> pd.Series:
+    """Per-respondent rim/rake weights via iterative proportional fitting (IPF).
+
+    Weights are normalised so their mean is 1 (their sum equals the included
+    sample size). Respondents excluded by a rim's missing rule get weight 0.
+    Target percentages are normalised to sum to 1 within each rim, and sample
+    cells with no respondents are skipped (they cannot be weighted up to).
+    """
+    spec = weight_var.weighting
+    if spec is None or not spec.rims:
+        return pd.Series(1.0, index=df.index)
+
+    used = {v for rim in spec.rims for v in rim.variables}
+    series = {name: _weight_series(df, index, name) for name in used}
+
+    included = pd.Series(True, index=df.index)
+    for rim in spec.rims:
+        if rim.missing == "exclude":
+            for v in rim.variables:
+                included &= series[v].notna()
+    for rim in spec.rims:
+        if rim.missing == "category":
+            for v in rim.variables:
+                series[v] = series[v].fillna("(Missing)")
+
+    weights = pd.Series(0.0, index=df.index)
+    weights[included] = 1.0
+
+    # Precompute each rim's cell masks + normalised targets (skip empty cells).
+    rim_cells: list[list[tuple[pd.Series, float]]] = []
+    for rim in spec.rims:
+        total_pct = sum(c.percent for c in rim.cells) or 1.0
+        cells: list[tuple[pd.Series, float]] = []
+        for cell in rim.cells:
+            mask = included.copy()
+            for var_name, value in zip(rim.variables, cell.values):
+                mask &= series[var_name] == value
+            if bool(mask.any()):
+                cells.append((mask, cell.percent / total_pct))
+        rim_cells.append(cells)
+
+    for _ in range(max(1, spec.max_iter)):
+        max_dev = 0.0
+        for cells in rim_cells:
+            total = float(weights[included].sum())
+            if total <= 0:
+                continue
+            for mask, target_prop in cells:
+                current = float(weights[mask].sum())
+                if current <= 0:
+                    continue
+                cur_prop = current / total
+                max_dev = max(max_dev, abs(target_prop - cur_prop))
+                weights.loc[mask] *= target_prop / cur_prop
+                total = float(weights[included].sum())
+        if max_dev < 1e-8:
+            break
+
+    total = float(weights[included].sum())
+    n = int(included.sum())
+    if total > 0:
+        weights.loc[included] *= n / total
+    return weights
+

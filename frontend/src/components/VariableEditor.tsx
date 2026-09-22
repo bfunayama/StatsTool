@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { WeightDialog } from './WeightDialog'
 import {
   bandVariable,
   binaryVariable,
@@ -57,6 +58,9 @@ export function VariableEditor({ meta, onChanged }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [bandFor, setBandFor] = useState<Variable | null>(null)
   const [binaryFor, setBinaryFor] = useState<Variable | null>(null)
+  const [weightDialog, setWeightDialog] = useState<{ initial: Variable | null } | null>(
+    null,
+  )
 
   // Re-sync whenever the dataset metadata changes (save, create, delete).
   useEffect(() => {
@@ -249,6 +253,9 @@ export function VariableEditor({ meta, onChanged }: Props) {
         </span>
         <span className="spacer" />
         {dirty && <span className="muted">Unsaved changes</span>}
+        <button onClick={() => setWeightDialog({ initial: null })}>
+          New weight
+        </button>
         <button className="primary" disabled={!dirty || saving} onClick={save}>
           {saving ? 'Saving…' : 'Save changes'}
         </button>
@@ -313,6 +320,7 @@ export function VariableEditor({ meta, onChanged }: Props) {
                   onCopy={() => run(() => copyVariable(meta.id, v.name))}
                   onBand={() => setBandFor(v)}
                   onBinary={() => setBinaryFor(v)}
+                  onEditWeight={() => setWeightDialog({ initial: v })}
                   onDelete={() => {
                     if (confirm(`Delete variable "${v.label}"?`))
                       run(() => deleteVariable(meta.id, v.name))
@@ -346,6 +354,18 @@ export function VariableEditor({ meta, onChanged }: Props) {
           }}
         />
       )}
+      {weightDialog && (
+        <WeightDialog
+          datasetId={meta.id}
+          variables={variables}
+          initial={weightDialog.initial}
+          onClose={() => setWeightDialog(null)}
+          onSaved={(m) => {
+            setWeightDialog(null)
+            onChanged(m)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -363,6 +383,7 @@ interface RowProps {
   onCopy: () => void
   onBand: () => void
   onBinary: () => void
+  onEditWeight: () => void
   onDelete: () => void
 }
 
@@ -556,11 +577,13 @@ function VariableRow({
   onCopy,
   onBand,
   onBinary,
+  onEditWeight,
   onDelete,
 }: RowProps) {
   const derived = variable.source_name !== null
   const isNumeric = variable.type === 'numeric'
   const isCategorical = variable.type === 'categorical'
+  const isWeight = variable.type === 'weight'
   const disabledTitle = dirty ? 'Save changes first' : undefined
 
   return (
@@ -573,6 +596,7 @@ function VariableRow({
         </td>
         <td className="var-name">
           {variable.name}
+          {isWeight && <span className="badge">weight</span>}
           {derived && <span className="badge">derived</span>}
         </td>
         <td>
@@ -583,47 +607,62 @@ function VariableRow({
           />
         </td>
         <td>
-          <select
-            value={variable.type}
-            onChange={(e) => onType(e.target.value as VariableType)}
-          >
-            {TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
+          {isWeight ? (
+            <span className="muted">weight</span>
+          ) : (
+            <select
+              value={variable.type}
+              onChange={(e) => onType(e.target.value as VariableType)}
+            >
+              {TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          )}
         </td>
         <td>
           <div className="row-actions">
-            <button onClick={onToggle}>{isOpen ? 'Hide' : 'View'}</button>
-            <button onClick={onCopy} disabled={dirty} title={disabledTitle}>
-              Copy
-            </button>
-            {isNumeric && (
-              <button onClick={onBand} disabled={dirty} title={disabledTitle}>
-                Band…
-              </button>
-            )}
-            {isCategorical && (
-              <button onClick={onBinary} disabled={dirty} title={disabledTitle}>
-                Binary…
-              </button>
-            )}
-            {derived && (
-              <button
-                onClick={onDelete}
-                disabled={dirty}
-                title={disabledTitle}
-                className="danger"
-              >
-                Delete
-              </button>
+            {isWeight ? (
+              <>
+                <button onClick={onEditWeight}>Edit weight</button>
+                <button onClick={onDelete} className="danger">
+                  Delete
+                </button>
+              </>
+            ) : (
+              <>
+                <button onClick={onToggle}>{isOpen ? 'Hide' : 'View'}</button>
+                <button onClick={onCopy} disabled={dirty} title={disabledTitle}>
+                  Copy
+                </button>
+                {isNumeric && (
+                  <button onClick={onBand} disabled={dirty} title={disabledTitle}>
+                    Band…
+                  </button>
+                )}
+                {isCategorical && (
+                  <button onClick={onBinary} disabled={dirty} title={disabledTitle}>
+                    Binary…
+                  </button>
+                )}
+                {derived && (
+                  <button
+                    onClick={onDelete}
+                    disabled={dirty}
+                    title={disabledTitle}
+                    className="danger"
+                  >
+                    Delete
+                  </button>
+                )}
+              </>
             )}
           </div>
         </td>
       </tr>
-      {isOpen && (
+      {isOpen && !isWeight && (
         <tr className="values-row">
           <td />
           <td colSpan={4}>

@@ -14,6 +14,9 @@ from .models import (
     BandRequest,
     BinaryRecode,
     BinaryRequest,
+    Combination,
+    CombinationsRequest,
+    CombinationsResponse,
     CopyRequest,
     CrosstabNode,
     CrosstabRequest,
@@ -31,6 +34,9 @@ from .models import (
     Variable,
     VariablesUpdate,
     VariableType,
+    WeightPreview,
+    WeightRequest,
+    WeightSpec,
 )
 
 app = FastAPI(title="StatsTool API", version="0.1.0")
@@ -205,12 +211,127 @@ def binary_variable(dataset_id: str, payload: BinaryRequest) -> DatasetMeta:
     return meta
 
 
+@app.post("/api/datasets/{dataset_id}/combinations", response_model=CombinationsResponse)
+def variable_combinations(
+    dataset_id: str, payload: CombinationsRequest
+) -> CombinationsResponse:
+    """Observed category combinations across variables, for building weight targets."""
+    meta, df = _load(dataset_id)
+    names = {v.name for v in meta.variables}
+    for name in payload.variables:
+        if name not in names:
+            raise HTTPException(status_code=404, detail=f"Unknown variable: {name}")
+    index = compute.build_index(meta.variables)
+    combos = compute.combinations(
+        df, index, payload.variables, payload.include_missing
+    )
+    total = sum(count for _values, count in combos) or 1
+    return CombinationsResponse(
+        combinations=[
+            Combination(
+                values=values, count=count, percent=round(count / total * 100, 2)
+            )
+            for values, count in combos
+        ]
+    )
+
+
+def _validate_weight_spec(spec: WeightSpec, names: set[str]) -> None:
+    """Reject an empty/invalid rim/rake spec (unknown vars, targets ≠ 100%)."""
+    if not spec.rims:
+        raise HTTPException(status_code=400, detail="Add at least one weighting rim.")
+    for rim in spec.rims:
+        if not rim.variables:
+            raise HTTPException(status_code=400, detail="Each rim needs a variable.")
+        for name in rim.variables:
+            if name not in names:
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown weighting variable: {name}"
+                )
+        # Targets must sum to 100% — reject rather than silently rescaling.
+        if rim.cells:
+            total = sum(c.percent for c in rim.cells)
+            if abs(total - 100) > 0.5:
+                where = " × ".join(rim.variables)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Targets for {where} add to {total:.1f}%, not 100%. "
+                        "Adjust them to total 100%."
+                    ),
+                )
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/weight-preview", response_model=WeightPreview
+)
+def weight_preview(dataset_id: str, payload: WeightRequest) -> WeightPreview:
+    """Compute sample-size diagnostics for a candidate weight without saving it."""
+    meta, df = _load(dataset_id)
+    names = {v.name for v in meta.variables}
+    _validate_weight_spec(payload.spec, names)
+    probe = Variable(
+        name="__preview__",
+        label=payload.new_label,
+        type=VariableType.weight,
+        weighting=payload.spec,
+    )
+    try:
+        weights = compute.compute_weights(
+            df, compute.build_index(meta.variables), probe
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=400, detail=f"Weight could not be computed: {err}"
+        ) from err
+    included = weights[weights > 0]
+    total = float(included.sum())
+    eff = compute.effective_n(included)
+    efficiency = (eff / total * 100) if total else 0.0
+    return WeightPreview(
+        total_sample=total, effective_sample=eff, efficiency=efficiency
+    )
+
+
+@app.post("/api/datasets/{dataset_id}/variables/weight", response_model=DatasetMeta)
+def weight_variable(dataset_id: str, payload: WeightRequest) -> DatasetMeta:
+    """Create or replace a rim/rake weight variable from a target definition."""
+    meta, df = _load(dataset_id)
+    names = {v.name for v in meta.variables}
+    _validate_weight_spec(payload.spec, names)
+    if payload.name:
+        var = _require_variable(meta, payload.name)
+        if var.type is not VariableType.weight:
+            raise HTTPException(status_code=400, detail="Not a weight variable.")
+        var.label = payload.new_label
+        var.weighting = payload.spec
+    else:
+        existing = {v.name for v in meta.variables}
+        var = Variable(
+            name=compute.unique_name("weight", existing),
+            label=payload.new_label,
+            type=VariableType.weight,
+            weighting=payload.spec,
+        )
+        meta.variables.append(var)
+
+    try:
+        compute.compute_weights(df, compute.build_index(meta.variables), var)
+    except Exception as err:  # bad targets, unknown categories, etc.
+        raise HTTPException(
+            status_code=400, detail=f"Weight could not be computed: {err}"
+        ) from err
+
+    storage.save_meta(meta)
+    return meta
+
+
 @app.delete("/api/datasets/{dataset_id}/variables/{name}", response_model=DatasetMeta)
 def delete_variable(dataset_id: str, name: str) -> DatasetMeta:
     """Delete a derived variable (raw imported columns cannot be deleted)."""
     meta, _ = _load(dataset_id)
     target = _require_variable(meta, name)
-    if target.source_name is None:
+    if target.source_name is None and target.type is not VariableType.weight:
         raise HTTPException(
             status_code=400, detail="Imported columns cannot be deleted."
         )

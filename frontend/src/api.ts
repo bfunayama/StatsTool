@@ -7,6 +7,7 @@ export type VariableType =
   | 'datetime'
   | 'text'
   | 'binary'
+  | 'weight'
 
 export interface ValueAttribute {
   source_value: string
@@ -35,6 +36,23 @@ export interface BinaryRecode {
 
 export type Recode = BandRecode | BinaryRecode
 
+export interface WeightCell {
+  values: string[]
+  percent: number
+}
+
+export interface WeightRim {
+  id: string
+  variables: string[]
+  missing: 'exclude' | 'category'
+  cells: WeightCell[]
+}
+
+export interface WeightSpec {
+  rims: WeightRim[]
+  max_iter: number
+}
+
 export interface Variable {
   name: string
   label: string
@@ -43,6 +61,13 @@ export interface Variable {
   values: ValueAttribute[]
   recode: Recode | null
   question_id?: string | null
+  weighting?: WeightSpec | null
+}
+
+export interface Combination {
+  values: string[]
+  count: number
+  percent: number
 }
 
 export type QuestionKind = 'multi' | 'grid' | 'grid2d'
@@ -153,6 +178,7 @@ export interface CrosstabCell {
 export interface CrosstabColumn {
   label: string
   base: number
+  eff_base?: number | null
 }
 
 export interface CrosstabResponse {
@@ -161,6 +187,8 @@ export interface CrosstabResponse {
   columns: CrosstabColumn[]
   cells: CrosstabCell[][]
   total_base: number
+  total_eff_base?: number | null
+  weighted: boolean
   row_kind: 'variable' | 'multi' | 'grid' | 'grid2d'
 }
 
@@ -181,6 +209,7 @@ export interface SavedCrosstabSpec {
   row: CrosstabRowSpec
   column: string | null
   filter_id: string | null
+  weight: string | null
   display: CrosstabDisplay
   row_groups: CrosstabGroup[]
   column_groups: CrosstabGroup[]
@@ -295,6 +324,7 @@ export function runCrosstab(
     row: CrosstabRowSpec
     column: string | null
     filterId?: string | null
+    weight?: string | null
     rowGroups?: CrosstabGroup[]
     columnGroups?: CrosstabGroup[]
   },
@@ -303,8 +333,51 @@ export function runCrosstab(
     row: req.row,
     column: req.column ?? null,
     filter_id: req.filterId ?? null,
+    weight: req.weight ?? null,
     row_groups: req.rowGroups ?? [],
     column_groups: req.columnGroups ?? [],
+  })
+}
+
+export function getCombinations(
+  id: string,
+  variables: string[],
+  includeMissing: boolean,
+): Promise<Combination[]> {
+  return postJson<{ combinations: Combination[] }>(
+    `/api/datasets/${id}/combinations`,
+    { variables, include_missing: includeMissing },
+  ).then((r) => r.combinations)
+}
+
+export function saveWeight(
+  id: string,
+  spec: WeightSpec,
+  newLabel: string,
+  name?: string | null,
+): Promise<DatasetMeta> {
+  return postJson(`/api/datasets/${id}/variables/weight`, {
+    name: name ?? null,
+    new_label: newLabel,
+    spec,
+  })
+}
+
+export interface WeightPreview {
+  total_sample: number
+  effective_sample: number
+  efficiency: number
+}
+
+export function previewWeight(
+  id: string,
+  spec: WeightSpec,
+  newLabel: string,
+): Promise<WeightPreview> {
+  return postJson(`/api/datasets/${id}/weight-preview`, {
+    name: null,
+    new_label: newLabel,
+    spec,
   })
 }
 

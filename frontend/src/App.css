@@ -207,6 +207,43 @@ select {
 .ct-chip:hover {
   border-color: var(--accent);
 }
+
+.weight-modal {
+  max-width: 40rem;
+  width: 90vw;
+}
+.weight-rims {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-height: 55vh;
+  overflow: auto;
+}
+.weight-rim {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+.weight-rim-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.weight-rim-vars {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.weight-cells {
+  max-width: 26rem;
+}
+.ct-weighted {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent);
+}
 .ct-menu-backdrop {
   position: fixed;
   inset: 0;
@@ -553,6 +590,18 @@ button.danger:hover:not(:disabled) {
 }
 .modal-header h3 {
   margin: 0;
+}
+.weight-efficiency {
+  margin-left: auto;
+  margin-right: 0.75rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.ct-caption {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted, #666);
+  font-style: italic;
 }
 .modal-actions {
   display: flex;

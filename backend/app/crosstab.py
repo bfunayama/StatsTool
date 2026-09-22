@@ -126,7 +126,14 @@ def compute_crosstab(
         row_kind = "variable"
     rows = _apply_groups(rows, request.row_groups, df.index)
 
-    return _assemble(df.index, banner, rows, row_valid, row_kind)
+    weights = None
+    if request.weight:
+        weight_var = index.get(request.weight)
+        if weight_var is None:
+            raise CrosstabError(f"Unknown weight variable: {request.weight}")
+        weights = compute.compute_weights(df, index, weight_var)
+
+    return _assemble(df.index, banner, rows, row_valid, row_kind, weights)
 
 
 def _combine(masks: dict[str, pd.Series], members: list[str], index) -> pd.Series:
@@ -174,28 +181,40 @@ def _assemble(
     rows: list[tuple[str, pd.Series, float | None]],
     row_valid: pd.Series,
     row_kind: str,
+    weights: pd.Series | None,
 ) -> CrosstabResponse:
+    weighted = weights is not None
+
+    def wsum(mask: pd.Series) -> float:
+        return float(weights[mask].sum()) if weighted else float(int(mask.sum()))
+
     columns: list[CrosstabColumn] = []
     cells: list[list[CrosstabCell]] = [
         [CrosstabCell(count=0.0) for _ in banner] for _ in rows
     ]
     for ci, (label, in_col, _cv) in enumerate(banner):
-        base = int((in_col & row_valid).sum())
-        columns.append(CrosstabColumn(label=label, base=float(base)))
+        col_valid = in_col & row_valid
+        base = wsum(col_valid)
+        eff = compute.effective_n(weights[col_valid]) if weighted else None
+        columns.append(CrosstabColumn(label=label, base=base, eff_base=eff))
         for ri, (_rlabel, row_mask, _rv) in enumerate(rows):
-            count = int((in_col & row_mask).sum())
+            count = wsum(in_col & row_mask)
             pct = (count / base * 100.0) if base else None
-            cells[ri][ci] = CrosstabCell(count=float(count), column_pct=pct)
+            cells[ri][ci] = CrosstabCell(count=count, column_pct=pct)
 
     union = pd.Series(False, index=index)
     for _label, mask, _value in banner:
         union = union | mask
-    total_base = int((union & row_valid).sum())
+    valid = union & row_valid
+    total_base = wsum(valid)
+    total_eff = compute.effective_n(weights[valid]) if weighted else None
     return CrosstabResponse(
         row_labels=[label for label, _m, _v in rows],
         row_values=[value for _l, _m, value in rows],
         columns=columns,
         cells=cells,
-        total_base=float(total_base),
+        total_base=total_base,
+        total_eff_base=total_eff,
+        weighted=weighted,
         row_kind=row_kind,
     )
