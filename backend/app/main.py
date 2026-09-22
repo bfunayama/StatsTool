@@ -204,6 +204,10 @@ def distinct_variable(dataset_id: str, name: str) -> DistinctResponse:
     var = _require_variable(meta, name)
     series = compute.compute_display_series(df, compute.build_index(meta.variables), var)
     pairs, numeric, vmin, vmax = compute.distinct_values(series)
+    order = compute.label_order(var)
+    if order is not None:
+        rank = {label: i for i, label in enumerate(order)}
+        pairs.sort(key=lambda p: (rank.get(p[0], len(order)), p[0]))
     return DistinctResponse(
         values=[DistinctValue(value=v, count=c) for v, c in pairs],
         numeric=numeric,

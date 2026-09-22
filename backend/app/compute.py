@@ -42,6 +42,29 @@ def distinct_values(series: pd.Series) -> tuple[list[tuple[str, int]], bool, flo
     return pairs, is_numeric, vmin, vmax
 
 
+def label_order(var: Variable) -> list[str] | None:
+    """Preferred display-label order for a variable, or None for default sort.
+
+    Categorical labels follow their value attributes (ordered by the assigned
+    numeric value); banded/binary labels follow the recode's own order.
+    """
+    if isinstance(var.recode, BandRecode):
+        return [b.label for b in var.recode.bands]
+    if isinstance(var.recode, BinaryRecode):
+        return [var.recode.false_label, var.recode.true_label]
+    if var.values:
+        ordered = sorted(
+            (v for v in var.values if not v.missing),
+            key=lambda v: v.value if v.value is not None else float("inf"),
+        )
+        labels: list[str] = []
+        for v in ordered:
+            if v.label not in labels:
+                labels.append(v.label)
+        return labels
+    return None
+
+
 def seed_value_attributes(series: pd.Series) -> list[ValueAttribute]:
     """Build starter value attributes from a column's distinct values.
 
