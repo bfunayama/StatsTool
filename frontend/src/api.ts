@@ -139,6 +139,29 @@ export interface DistinctResponse {
   max: number | null
 }
 
+export interface CrosstabRowSpec {
+  kind: 'variable' | 'question'
+  ref: string
+}
+
+export interface CrosstabCell {
+  count: number
+  column_pct: number | null
+}
+
+export interface CrosstabColumn {
+  label: string
+  base: number
+}
+
+export interface CrosstabResponse {
+  row_labels: string[]
+  columns: CrosstabColumn[]
+  cells: CrosstabCell[][]
+  total_base: number
+  row_kind: 'variable' | 'multi' | 'grid' | 'grid2d'
+}
+
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText
@@ -227,6 +250,19 @@ export function filterCount(
   filter: Filter,
 ): Promise<FilterCountResponse> {
   return postJson(`/api/datasets/${id}/filter-count`, filter)
+}
+
+export function runCrosstab(
+  id: string,
+  row: CrosstabRowSpec,
+  column: string,
+  filterId?: string | null,
+): Promise<CrosstabResponse> {
+  return postJson(`/api/datasets/${id}/crosstab`, {
+    row,
+    column,
+    filter_id: filterId ?? null,
+  })
 }
 
 export function getDistinct(

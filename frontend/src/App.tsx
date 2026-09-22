@@ -3,10 +3,11 @@ import './App.css'
 import { getDataset, type DatasetMeta } from './api'
 import { DatasetImport } from './components/DatasetImport'
 import { DataPreview } from './components/DataPreview'
+import { CrosstabView } from './components/CrosstabView'
 import { FiltersManager } from './components/FiltersManager'
 import { VariableEditor } from './components/VariableEditor'
 
-type Tab = 'variables' | 'filters' | 'data'
+type Tab = 'variables' | 'filters' | 'crosstabs' | 'data'
 
 function App() {
   const [datasetId, setDatasetId] = useState<string | null>(null)
@@ -72,6 +73,12 @@ function App() {
               Filters
             </button>
             <button
+              className={tab === 'crosstabs' ? 'tab active' : 'tab'}
+              onClick={() => setTab('crosstabs')}
+            >
+              Crosstabs
+            </button>
+            <button
               className={tab === 'data' ? 'tab active' : 'tab'}
               onClick={() => setTab('data')}
             >
@@ -103,6 +110,7 @@ function App() {
           {tab === 'filters' && (
             <FiltersManager meta={meta} onChanged={setMeta} />
           )}
+          {tab === 'crosstabs' && <CrosstabView meta={meta} />}
           {tab === 'data' && (
             <DataPreview datasetId={meta.id} filterId={dataFilter || undefined} />
           )}

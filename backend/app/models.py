@@ -270,5 +270,44 @@ class QuestionsUpdate(BaseModel):
     questions: list[Question]
 
 
+class CrosstabRowSpec(BaseModel):
+    """What goes down the side of a crosstab: a variable or a grouped variable."""
+
+    kind: Literal["variable", "question"]
+    ref: str  # variable name, or question id when kind == "question"
+
+
+class CrosstabRequest(BaseModel):
+    """Request a crosstab of one row source against one column variable."""
+
+    row: CrosstabRowSpec
+    column: str  # column (banner) variable name
+    filter_id: str | None = None  # optional saved filter to restrict respondents
+
+
+class CrosstabCell(BaseModel):
+    """One cell of a crosstab. Extra statistics can be added over time."""
+
+    count: float
+    column_pct: float | None = None  # count / column base, as a percentage
+
+
+class CrosstabColumn(BaseModel):
+    """A banner column: its label and valid base (denominator for column %)."""
+
+    label: str
+    base: float
+
+
+class CrosstabResponse(BaseModel):
+    """A computed crosstab: row labels, banner columns, and a grid of cells."""
+
+    row_labels: list[str]
+    columns: list[CrosstabColumn]
+    cells: list[list[CrosstabCell]]  # cells[row][column]
+    total_base: float
+    row_kind: Literal["variable", "multi", "grid", "grid2d"]
+
+
 # DatasetMeta references Filter before it is defined; resolve the forward ref.
 DatasetMeta.model_rebuild()

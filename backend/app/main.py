@@ -8,13 +8,15 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import compute, detect, filters as filtering, ingest, storage
+from . import compute, crosstab as crosstabbing, detect, filters as filtering, ingest, storage
 from .models import (
     BandRecode,
     BandRequest,
     BinaryRecode,
     BinaryRequest,
     CopyRequest,
+    CrosstabRequest,
+    CrosstabResponse,
     DatasetMeta,
     DatasetSummary,
     DistinctResponse,
@@ -272,6 +274,18 @@ def filter_count(dataset_id: str, filt: Filter) -> FilterCountResponse:
     index = compute.build_index(meta.variables)
     mask = filtering.evaluate_filter(df, index, filt)
     return FilterCountResponse(count=int(mask.sum()), total=int(df.shape[0]))
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/crosstab", response_model=CrosstabResponse
+)
+def crosstab(dataset_id: str, request: CrosstabRequest) -> CrosstabResponse:
+    """Compute a crosstab of one row source against one column variable."""
+    meta, df = _load(dataset_id)
+    try:
+        return crosstabbing.compute_crosstab(df, meta, request)
+    except crosstabbing.CrosstabError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
 
 
 @app.get("/api/datasets/{dataset_id}/preview", response_model=PreviewResponse)
