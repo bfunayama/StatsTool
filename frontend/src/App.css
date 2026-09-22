@@ -131,6 +131,11 @@ select {
 .crosstab .ct-cell {
   line-height: 1.25;
 }
+.crosstab .ct-cell-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .crosstab .ct-stat-line {
   display: block;
 }
@@ -159,32 +164,6 @@ select {
   font-weight: 700;
   margin-left: 0.25rem;
   font-size: 0.78rem;
-}
-.ct-sig-legend {
-  margin: 0.25rem 0 0;
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-.crosstab .ct-cell {
-  cursor: default;
-}
-.crosstab .ct-cell-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-.sig-compare {
-  margin: 0.25rem 0 0.75rem;
-  padding-left: 1.1rem;
-}
-.sig-compare li {
-  margin: 0.15rem 0;
-}
-.sig-yes {
-  color: #1a7f37;
-}
-.sig-no {
-  color: var(--muted);
 }
 .crosstab .ct-corner {
   text-align: left;
@@ -654,6 +633,62 @@ button.danger:hover:not(:disabled) {
   font-size: 0.85rem;
   color: var(--muted, #666);
   font-style: italic;
+}
+.crosstab .ct-top-head {
+  text-align: center;
+  border-bottom: 1px solid var(--border, #d0d0d0);
+  font-weight: 700;
+}
+.ct-sig-legend {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.ct-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.25rem;
+}
+.ct-banner-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.ct-banner-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.ct-banner-seg select {
+  max-width: 12rem;
+}
+.ct-banner-del {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0 0.2rem;
+}
+.ct-banner-clear {
+  color: var(--muted);
+}
+.sig-compare {
+  margin: 0.25rem 0 0.75rem;
+  padding-left: 1.1rem;
+}
+.sig-compare li {
+  margin: 0.15rem 0;
+}
+.sig-yes {
+  color: #1a7f37;
+}
+.sig-no {
+  color: var(--muted);
 }
 .modal-actions {
   display: flex;

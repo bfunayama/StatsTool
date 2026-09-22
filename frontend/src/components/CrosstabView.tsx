@@ -8,6 +8,7 @@ import {
 import {
   runCrosstab,
   saveCrosstabs,
+  type BannerSegment,
   type CrosstabGroup,
   type CrosstabNode,
   type CrosstabResponse,
@@ -181,6 +182,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   const [rowValue, setRowValue] = useState('')
   const [colValue, setColValue] = useState('')
+  // Advanced banner: side-by-side segments, each 1 variable or a 2-level nest.
+  // Empty = simple mode (use the single Column dropdown, with column NET/hide).
+  const [bannerSegments, setBannerSegments] = useState<BannerSegment[]>([])
   const [filterId, setFilterId] = useState('')
   const [weightId, setWeightId] = useState('')
   const [result, setResult] = useState<CrosstabResponse | null>(null)
@@ -234,6 +238,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
     () => Number(localStorage.getItem('statstool.ctSidebar')) || 240,
   )
 
+  // Advanced banner active → send segments and disable per-column NET/hide/rename.
+  const advancedBanner = bannerSegments.length > 0
+  const bannerKey = JSON.stringify(bannerSegments)
+  const hasColumn = advancedBanner || !!colValue
+
   useEffect(() => {
     localStorage.setItem('statstool.ctSidebar', String(sidebarWidth))
   }, [sidebarWidth])
@@ -254,10 +263,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   function currentSpec(): SavedCrosstabSpec | null {
     const row = decodeRow(rowValue)
-    if (!row || !colValue) return null
+    if (!row || !hasColumn) return null
     return {
       row,
-      column: colValue === TOTAL ? null : colValue,
+      column: advancedBanner ? null : colValue === TOTAL ? null : colValue,
+      banner: bannerSegments,
       filter_id: filterId || null,
       weight: weightId || null,
       display: {
@@ -282,6 +292,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   function loadSpec(spec: SavedCrosstabSpec) {
     setRowValue(encodeRow(spec.row))
     setColValue(spec.column ?? TOTAL)
+    setBannerSegments(spec.banner ?? [])
     setFilterId(spec.filter_id ?? '')
     setWeightId(spec.weight ?? '')
     setCellStats(new Set(spec.display.cell_stats as CellStat[]))
@@ -400,7 +411,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   useEffect(() => {
     const row = decodeRow(rowValue)
-    if (!row || !colValue) {
+    if (!row || !hasColumn) {
       setResult(null)
       setError(null)
       return
@@ -410,11 +421,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setError(null)
     runCrosstab(meta.id, {
       row,
-      column: colValue === TOTAL ? null : colValue,
+      column: advancedBanner ? null : colValue === TOTAL ? null : colValue,
+      banner: advancedBanner ? bannerSegments : [],
       filterId: filterId || null,
       weight: weightId || null,
       rowGroups,
-      columnGroups,
+      columnGroups: advancedBanner ? [] : columnGroups,
     })
       .then((res) => {
         if (!ignore) setResult(res)
@@ -431,7 +443,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return () => {
       ignore = true
     }
-  }, [meta.id, rowValue, colValue, filterId, weightId, rowGroups, columnGroups])
+  }, [meta.id, rowValue, colValue, bannerKey, filterId, weightId, rowGroups, columnGroups])
 
   // A new/rebuilt table invalidates any cell selection (indices shift).
   useEffect(() => {
@@ -713,6 +725,20 @@ export function CrosstabView({ meta, onChanged }: Props) {
     ? result.columns.map((c) => c.label).filter((l) => colHidden.has(l))
     : []
 
+  // Two-level banner → render a spanning top header row. Top spans group
+  // contiguous visible columns that share a banner sub-group.
+  const twoLevel = !!result && result.columns.some((c) => c.top_label)
+  const topSpans: { key: string; label: string; count: number }[] = []
+  if (result && twoLevel) {
+    for (const ci of visColIdx) {
+      const c = result.columns[ci]
+      const gid = c.group ?? ''
+      const last = topSpans[topSpans.length - 1]
+      if (last && last.key === gid) last.count += 1
+      else topSpans.push({ key: gid, label: c.top_label ?? '', count: 1 })
+    }
+  }
+
   function toggleCollapse(id: string) {
     setCollapsed((prev) => {
       const next = new Set(prev)
@@ -741,7 +767,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // because a grouped (Pick any) variable cannot sit in the column banner.
   const canSwap = (() => {
     const row = decodeRow(rowValue)
-    return !!colValue && colValue !== TOTAL && !!row && row.kind === 'variable'
+    return (
+      !advancedBanner &&
+      !!colValue &&
+      colValue !== TOTAL &&
+      !!row &&
+      row.kind === 'variable'
+    )
   })()
 
   function swapRowColumn() {
@@ -777,6 +809,29 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setColHidden(new Set())
     setSelCols(new Set())
     setAnchorCol(null)
+  }
+
+  // Set a banner segment's primary (level 0) or nested (level 1) variable.
+  function setSegmentVar(si: number, level: 0 | 1, value: string) {
+    setBannerSegments((prev) =>
+      prev.map((seg, i) => {
+        if (i !== si) return seg
+        if (level === 0) {
+          if (!value) return { variables: [] }
+          const nested = seg.variables[1]
+          return {
+            variables: nested && nested !== value ? [value, nested] : [value],
+          }
+        }
+        const primary = seg.variables[0]
+        if (!primary) return seg
+        return { variables: value ? [primary, value] : [primary] }
+      }),
+    )
+  }
+
+  function removeSegment(si: number) {
+    setBannerSegments((prev) => prev.filter((_, i) => i !== si))
   }
 
   function uniqueGroupLabel(base: string, existing: CrosstabGroup[]): string {
@@ -1203,7 +1258,16 @@ export function CrosstabView({ meta, onChanged }: Props) {
         </label>
         <label className="field">
           Column
-          <select value={colValue} onChange={(e) => changeColumn(e.target.value)}>
+          <select
+            value={colValue}
+            onChange={(e) => changeColumn(e.target.value)}
+            disabled={advancedBanner}
+            title={
+              advancedBanner
+                ? 'Using the banner builder below. Clear it to use a single column.'
+                : undefined
+            }
+          >
             <option value="">Choose a variable…</option>
             <option value={TOTAL}>Total sample (no column)</option>
             {memberless.map((v) => (
@@ -1249,6 +1313,68 @@ export function CrosstabView({ meta, onChanged }: Props) {
         </label>
         <span className="spacer" />
         {loading && <span className="muted">Computing…</span>}
+      </div>
+
+      <div className="ct-banner">
+        <span className="ct-banner-label">
+          Banner
+          <span className="muted"> (side-by-side / nested columns)</span>
+        </span>
+        {bannerSegments.length === 0 ? (
+          <button onClick={() => setBannerSegments([{ variables: [] }])}>
+            + Build banner
+          </button>
+        ) : (
+          <>
+            {bannerSegments.map((seg, si) => (
+              <span key={si} className="ct-banner-seg">
+                <select
+                  value={seg.variables[0] ?? ''}
+                  onChange={(e) => setSegmentVar(si, 0, e.target.value)}
+                  title="Banner column variable"
+                >
+                  <option value="">Total sample</option>
+                  {memberless.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
+                {seg.variables.length >= 1 && (
+                  <select
+                    value={seg.variables[1] ?? ''}
+                    onChange={(e) => setSegmentVar(si, 1, e.target.value)}
+                    title="Nest a second variable under each category"
+                  >
+                    <option value="">— no nesting —</option>
+                    {memberless
+                      .filter((v) => v.name !== seg.variables[0])
+                      .map((v) => (
+                        <option key={v.name} value={v.name}>
+                          ↳ {v.label}
+                        </option>
+                      ))}
+                  </select>
+                )}
+                <button
+                  className="ct-banner-del"
+                  onClick={() => removeSegment(si)}
+                  title="Remove this banner column"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+            <button
+              onClick={() => setBannerSegments([...bannerSegments, { variables: [] }])}
+            >
+              + Add column
+            </button>
+            <button className="ct-banner-clear" onClick={() => setBannerSegments([])}>
+              Use single column
+            </button>
+          </>
+        )}
       </div>
 
       <div className="ct-stat-groups">
@@ -1376,6 +1502,50 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <div className="table-scroll">
           <table className="grid crosstab">
             <thead>
+              {twoLevel ? (
+                <>
+                  <tr>
+                    <th className="ct-corner" rowSpan={2}>
+                      {cellStatLabels.map((label) => (
+                        <span key={label} className="ct-legend-line">
+                          {label}
+                        </span>
+                      ))}
+                    </th>
+                    {topSpans.map((span) => (
+                      <th
+                        key={span.key}
+                        className="ct-colhead ct-top-head"
+                        colSpan={span.count}
+                      >
+                        {span.label}
+                      </th>
+                    ))}
+                    {activeSummaryCols.map((s) => (
+                      <th
+                        key={s.key}
+                        rowSpan={2}
+                        className="ct-colhead ct-summary-head"
+                      >
+                        {s.label}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    {visColIdx.map((ci) => {
+                      const c = result.columns[ci]
+                      return (
+                        <th key={ci} className="ct-colhead">
+                          {c.label}
+                          {sigOn && lettersOn && c.letter && (
+                            <span className="ct-col-letter">{c.letter}</span>
+                          )}
+                        </th>
+                      )
+                    })}
+                  </tr>
+                </>
+              ) : (
               <tr>
                 <th className="ct-corner">
                   {cellStatLabels.map((label) => (
@@ -1444,6 +1614,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                   </th>
                 ))}
               </tr>
+              )}
             </thead>
             <tbody>
               {visRowIdx.map((ri) => {
@@ -1506,7 +1677,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       const cellKey = `${ri}:${ci}`
                       return (
                         <td
-                          key={result.columns[ci].label}
+                          key={ci}
                           className={`ct-cell${
                             selCells.has(cellKey) ? ' ct-cell-selected' : ''
                           }`}
@@ -1556,7 +1727,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                     const meanKey = `mean:${ci}`
                     return (
                       <td
-                        key={result.columns[ci].label}
+                        key={ci}
                         className={`ct-cell ct-summary${
                           selectable && selCells.has(meanKey)
                             ? ' ct-cell-selected'

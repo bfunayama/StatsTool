@@ -76,22 +76,8 @@ def compute_crosstab(
         mask = filtering.evaluate_filter(df, index, saved)
         df = df[mask]
 
-    # Banner columns as (label, respondent mask, unused value). Total = one
-    # all-true column when there is no column variable.
-    if not request.column:
-        banner: list[tuple[str, pd.Series, float | None]] = [
-            ("Total", pd.Series(True, index=df.index), None)
-        ]
-    else:
-        col_var = index.get(request.column)
-        if col_var is None:
-            raise CrosstabError(f"Unknown column variable: {request.column}")
-        col_series = compute.compute_display_series(df, index, col_var)
-        banner = [
-            (label, col_series == label, None)
-            for label in _ordered_categories(col_series, col_var)
-        ]
-    banner = _apply_groups(banner, request.column_groups, df.index)
+    # Banner columns (side-by-side segments, optionally two levels deep).
+    banner, col_top, col_group = _build_banner(df, index, request)
 
     # Rows as (label, respondent mask, numeric value|None) plus the "valid answer"
     # mask that sets every column's base (grouping never changes the base).
@@ -135,7 +121,73 @@ def compute_crosstab(
             raise CrosstabError(f"Unknown weight variable: {request.weight}")
         weights = compute.compute_weights(df, index, weight_var)
 
-    return _assemble(df.index, banner, rows, row_valid, row_kind, weights)
+    return _assemble(
+        df.index, banner, col_top, col_group, rows, row_valid, row_kind, weights
+    )
+
+
+# One banner column while building: (label, respondent mask, unused value).
+_GROUP_SEP = "\u0001"
+
+
+def _build_banner(
+    df: pd.DataFrame, index, request: CrosstabRequest
+) -> tuple[list[tuple[str, pd.Series, float | None]], list[str], list[str]]:
+    """Build banner columns plus per-column top label and significance group.
+
+    ``request.banner`` (new) supports side-by-side segments and two-level nesting;
+    otherwise fall back to the single ``column`` (with column NET/merge groups).
+    """
+    idx = df.index
+    if request.banner:
+        banner: list[tuple[str, pd.Series, float | None]] = []
+        top: list[str] = []
+        group: list[str] = []
+        for si, segment in enumerate(request.banner):
+            variables = segment.variables
+            if not variables:  # Total column
+                banner.append(("Total", pd.Series(True, index=idx), None))
+                top.append("Total")
+                group.append(f"{si}{_GROUP_SEP}__total__")
+                continue
+            primary = index.get(variables[0])
+            if primary is None:
+                raise CrosstabError(f"Unknown banner variable: {variables[0]}")
+            s1 = compute.compute_display_series(df, index, primary)
+            if len(variables) == 1:
+                for label in _ordered_categories(s1, primary):
+                    banner.append((label, s1 == label, None))
+                    top.append(primary.label)
+                    group.append(f"{si}{_GROUP_SEP}__var__")
+                continue
+            nested = index.get(variables[1])
+            if nested is None:
+                raise CrosstabError(f"Unknown banner variable: {variables[1]}")
+            s2 = compute.compute_display_series(df, index, nested)
+            for c1 in _ordered_categories(s1, primary):
+                m1 = s1 == c1
+                for c2 in _ordered_categories(s2, nested):
+                    banner.append((c2, m1 & (s2 == c2), None))
+                    top.append(c1)
+                    group.append(f"{si}{_GROUP_SEP}{c1}")
+        return banner, top, group
+
+    # Legacy single-column path (Total or one variable), with column NET/merge.
+    if not request.column:
+        banner = [("Total", pd.Series(True, index=idx), None)]
+    else:
+        col_var = index.get(request.column)
+        if col_var is None:
+            raise CrosstabError(f"Unknown column variable: {request.column}")
+        col_series = compute.compute_display_series(df, index, col_var)
+        banner = [
+            (label, col_series == label, None)
+            for label in _ordered_categories(col_series, col_var)
+        ]
+    banner = _apply_groups(banner, request.column_groups, idx)
+    # Flat header (no top row) and a single comparison group across all columns.
+    return banner, [""] * len(banner), ["__all__"] * len(banner)
+
 
 
 def _combine(masks: dict[str, pd.Series], members: list[str], index) -> pd.Series:
@@ -180,6 +232,8 @@ def _apply_groups(
 def _assemble(
     index,
     banner: list[tuple[str, pd.Series, float | None]],
+    col_top: list[str],
+    col_group: list[str],
     rows: list[tuple[str, pd.Series, float | None]],
     row_valid: pd.Series,
     row_kind: str,
@@ -209,7 +263,15 @@ def _assemble(
         col_valid = in_col & row_valid
         base = wsum(col_valid)
         eff = compute.effective_n(weights[col_valid]) if weighted else None
-        columns.append(CrosstabColumn(label=label, base=base, eff_base=eff))
+        columns.append(
+            CrosstabColumn(
+                label=label,
+                base=base,
+                eff_base=eff,
+                top_label=col_top[ci],
+                group=col_group[ci],
+            )
+        )
         col_valids.append(col_valid)
         col_n.append(n_of(col_valid))
         for ri, (_rlabel, row_mask, _rv) in enumerate(rows):
@@ -218,7 +280,9 @@ def _assemble(
             cells[ri][ci] = CrosstabCell(count=count, column_pct=pct)
 
     if len(banner) >= 2:
-        _add_significance(banner, rows, cells, columns, col_valids, col_n, valid, wsum, n_of)
+        _add_significance(
+            rows, cells, columns, col_valids, col_n, col_group, wsum, n_of
+        )
 
     total_base = wsum(valid)
     total_eff = compute.effective_n(weights[valid]) if weighted else None
@@ -263,23 +327,28 @@ def _two_prop_z(p1: float, n1: float, p2: float, n2: float) -> float | None:
 
 
 def _add_significance(
-    banner: list[tuple[str, pd.Series, float | None]],
     rows: list[tuple[str, pd.Series, float | None]],
     cells: list[list[CrosstabCell]],
     columns: list[CrosstabColumn],
     col_valids: list[pd.Series],
     col_n: list[float],
-    valid: pd.Series,
+    col_group: list[str],
     wsum,
     n_of,
 ) -> None:
     """Column-proportion significance at 95%: A/B/C letters and up/down arrows.
 
-    Letters mark the columns a cell is significantly *greater* than. Arrows
-    compare each cell to the rest of the sample (▲ higher, ▼ lower).
+    Comparisons are made *within* each banner sub-group (columns sharing a parent
+    header). Letters mark the columns a cell is significantly greater than; arrows
+    compare each cell to the rest of its sub-group (▲ higher, ▼ lower).
     """
     for col, letter in zip(columns, _column_letters(len(columns))):
         col.letter = letter
+
+    # Column indices grouped by their significance sub-group, in display order.
+    groups: dict[str, list[int]] = {}
+    for ci, gid in enumerate(col_group):
+        groups.setdefault(gid, []).append(ci)
 
     props = [
         [None if c.column_pct is None else c.column_pct / 100.0 for c in row]
@@ -287,36 +356,38 @@ def _add_significance(
     ]
 
     for ri, (_rlabel, row_mask, _rv) in enumerate(rows):
-        for ci in range(len(columns)):
-            p = props[ri][ci]
-            if p is None:
+        for members in groups.values():
+            if len(members) < 2:
                 continue
-            rest = valid & ~banner[ci][1]
-            base_rest = wsum(rest)
-            n_rest = n_of(rest)
-            if base_rest <= 0 or n_rest <= 0:
-                continue
-            p_rest = wsum(row_mask & rest) / base_rest
-            z = _two_prop_z(p, col_n[ci], p_rest, n_rest)
-            if z is not None and abs(z) >= _Z_CRIT:
-                cells[ri][ci].sig_arrow = "up" if z > 0 else "down"
+            for ci in members:
+                p = props[ri][ci]
+                if p is None:
+                    continue
+                # "Rest" = the other columns in this same sub-group.
+                rest = pd.Series(False, index=row_mask.index)
+                for other in members:
+                    if other != ci:
+                        rest = rest | col_valids[other]
+                base_rest = wsum(rest)
+                n_rest = n_of(rest)
+                if base_rest > 0 and n_rest > 0:
+                    p_rest = wsum(row_mask & rest) / base_rest
+                    z = _two_prop_z(p, col_n[ci], p_rest, n_rest)
+                    if z is not None and abs(z) >= _Z_CRIT:
+                        cells[ri][ci].sig_arrow = "up" if z > 0 else "down"
 
-        for j in range(len(columns)):
-            pj = props[ri][j]
-            if pj is None:
-                continue
-            beaten: list[str] = []
-            for k in range(len(columns)):
-                if k == j:
-                    continue
-                pk = props[ri][k]
-                if pk is None or pj <= pk:
-                    continue
-                z = _two_prop_z(pj, col_n[j], pk, col_n[k])
-                if z is not None and z >= _Z_CRIT:
-                    letter = columns[k].letter
-                    if letter is not None:
-                        beaten.append(letter)
-            if beaten:
-                cells[ri][j].sig_higher = beaten
+                beaten: list[str] = []
+                for other in members:
+                    if other == ci:
+                        continue
+                    po = props[ri][other]
+                    if po is None or p <= po:
+                        continue
+                    z = _two_prop_z(p, col_n[ci], po, col_n[other])
+                    if z is not None and z >= _Z_CRIT:
+                        letter = columns[other].letter
+                        if letter is not None:
+                            beaten.append(letter)
+                if beaten:
+                    cells[ri][ci].sig_higher = beaten
 

@@ -182,6 +182,8 @@ export interface CrosstabColumn {
   base: number
   eff_base?: number | null
   letter?: string | null
+  top_label?: string
+  group?: string
 }
 
 export interface CrosstabResponse {
@@ -209,9 +211,14 @@ export interface CrosstabGroup {
   mode: 'net' | 'merge'
 }
 
+export interface BannerSegment {
+  variables: string[]
+}
+
 export interface SavedCrosstabSpec {
   row: CrosstabRowSpec
   column: string | null
+  banner?: BannerSegment[]
   filter_id: string | null
   weight: string | null
   display: CrosstabDisplay
@@ -327,6 +334,7 @@ export function runCrosstab(
   req: {
     row: CrosstabRowSpec
     column: string | null
+    banner?: BannerSegment[]
     filterId?: string | null
     weight?: string | null
     rowGroups?: CrosstabGroup[]
@@ -336,6 +344,7 @@ export function runCrosstab(
   return postJson(`/api/datasets/${id}/crosstab`, {
     row: req.row,
     column: req.column ?? null,
+    banner: req.banner ?? [],
     filter_id: req.filterId ?? null,
     weight: req.weight ?? null,
     row_groups: req.rowGroups ?? [],

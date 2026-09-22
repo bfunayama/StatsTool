@@ -347,6 +347,17 @@ class CrosstabRowSpec(BaseModel):
     ref: str  # variable name, or question id when kind == "question"
 
 
+class BannerSegment(BaseModel):
+    """One side-by-side block of the banner (columns).
+
+    ``variables`` holds 0, 1, or 2 variable names: [] is a Total column, [v] is
+    one variable's categories side by side, and [v1, v2] nests v2 under each of
+    v1's categories (two levels). Segments sit next to each other in the banner.
+    """
+
+    variables: list[str] = Field(default_factory=list)
+
+
 class CrosstabGroup(BaseModel):
     """A NET or merge of several row/column categories.
 
@@ -367,6 +378,7 @@ class CrosstabRequest(BaseModel):
 
     row: CrosstabRowSpec
     column: str | None = None  # None → a single "Total" banner (whole sample)
+    banner: list[BannerSegment] = Field(default_factory=list)  # nested/side-by-side
     filter_id: str | None = None  # optional saved filter to restrict respondents
     weight: str | None = None  # optional weight-variable name
     row_groups: list[CrosstabGroup] = Field(default_factory=list)
@@ -390,6 +402,8 @@ class CrosstabColumn(BaseModel):
     base: float
     eff_base: float | None = None  # Kish effective sample size (weighted tables)
     letter: str | None = None  # column id (A, B, C…) for significance letters
+    top_label: str = ""  # parent header (nested/side-by-side banners); "" = flat
+    group: str = ""  # sub-group id: header span + significance comparison scope
 
 
 class CrosstabResponse(BaseModel):
@@ -419,6 +433,7 @@ class SavedCrosstabSpec(BaseModel):
 
     row: CrosstabRowSpec
     column: str | None = None  # None → Total-sample table (no column)
+    banner: list[BannerSegment] = Field(default_factory=list)  # nested/side-by-side
     filter_id: str | None = None
     weight: str | None = None
     display: CrosstabDisplay = Field(default_factory=CrosstabDisplay)
