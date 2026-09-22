@@ -303,6 +303,7 @@ class CrosstabResponse(BaseModel):
     """A computed crosstab: row labels, banner columns, and a grid of cells."""
 
     row_labels: list[str]
+    row_values: list[float | None]  # numeric value per row (for mean/sum), or None
     columns: list[CrosstabColumn]
     cells: list[list[CrosstabCell]]  # cells[row][column]
     total_base: float

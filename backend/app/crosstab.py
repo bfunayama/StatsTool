@@ -39,6 +39,29 @@ def _ordered_categories(series: pd.Series, var: Variable) -> list[str]:
     return labels
 
 
+def _row_numeric_values(var: Variable, labels: list[str]) -> list[float | None]:
+    """Numeric value for each row label, for means/sums (None when not numeric).
+
+    Uses the variable's value attributes when present (a label's assigned code);
+    otherwise falls back to the label itself if it parses as a number.
+    """
+    coded = {
+        v.label: v.value
+        for v in var.values
+        if not v.missing and v.value is not None
+    }
+    values: list[float | None] = []
+    for label in labels:
+        if label in coded:
+            values.append(float(coded[label]))
+            continue
+        try:
+            values.append(float(label))
+        except (TypeError, ValueError):
+            values.append(None)
+    return values
+
+
 def compute_crosstab(
     df: pd.DataFrame, meta: DatasetMeta, request: CrosstabRequest
 ) -> CrosstabResponse:
@@ -101,6 +124,7 @@ def _crosstab_variable(
     total_base = int((col_series.notna() & row_valid).sum())
     return CrosstabResponse(
         row_labels=row_labels,
+        row_values=_row_numeric_values(row_var, row_labels),
         columns=columns,
         cells=cells,
         total_base=float(total_base),
@@ -146,6 +170,7 @@ def _crosstab_multi(
     total_base = int((col_series.notna() & answered).sum())
     return CrosstabResponse(
         row_labels=row_labels,
+        row_values=[None for _ in row_labels],
         columns=columns,
         cells=cells,
         total_base=float(total_base),

@@ -123,25 +123,50 @@ select {
 .crosstab .ct-colhead {
   font-weight: 600;
 }
-.crosstab .ct-base-label {
-  text-align: left;
-  font-weight: 400;
-  color: var(--muted);
-}
-.crosstab .ct-base {
-  font-weight: 400;
-  color: var(--muted);
-}
 .crosstab .ct-cell {
-  line-height: 1.2;
+  line-height: 1.25;
 }
-.crosstab .ct-count {
+.crosstab .ct-stat-line {
   display: block;
 }
-.crosstab .ct-pct {
-  display: block;
-  font-size: 0.8rem;
+.crosstab .ct-stat-tag {
+  margin-right: 0.3rem;
+  font-size: 0.72rem;
   color: var(--muted);
+}
+.crosstab .ct-summary,
+.crosstab .ct-summary-head {
+  color: var(--muted);
+  font-weight: 400;
+}
+.crosstab .ct-summary-row {
+  border-top: 2px solid var(--border);
+}
+
+.ct-stat-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.ct-stat-group {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.ct-stat-group legend {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0 0.3rem;
+}
+.ct-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
 }
 
 .tabs {

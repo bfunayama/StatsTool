@@ -156,6 +156,7 @@ export interface CrosstabColumn {
 
 export interface CrosstabResponse {
   row_labels: string[]
+  row_values: (number | null)[]
   columns: CrosstabColumn[]
   cells: CrosstabCell[][]
   total_base: number
