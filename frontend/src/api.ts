@@ -78,6 +78,7 @@ export interface DatasetMeta {
   variables: Variable[]
   questions: Question[]
   filters: Filter[]
+  crosstabs: CrosstabNode[]
 }
 
 export type Operator =
@@ -161,6 +162,28 @@ export interface CrosstabResponse {
   cells: CrosstabCell[][]
   total_base: number
   row_kind: 'variable' | 'multi' | 'grid' | 'grid2d'
+}
+
+export interface CrosstabDisplay {
+  cell_stats: string[]
+  summary_rows: string[]
+  summary_cols: string[]
+}
+
+export interface SavedCrosstabSpec {
+  row: CrosstabRowSpec
+  column: string
+  filter_id: string | null
+  display: CrosstabDisplay
+}
+
+export interface CrosstabNode {
+  id: string
+  name: string
+  kind: 'folder' | 'crosstab'
+  children: CrosstabNode[]
+  spec: SavedCrosstabSpec | null
+  version: number
 }
 
 async function handle<T>(res: Response): Promise<T> {
@@ -264,6 +287,17 @@ export function runCrosstab(
     column,
     filter_id: filterId ?? null,
   })
+}
+
+export function saveCrosstabs(
+  id: string,
+  crosstabs: CrosstabNode[],
+): Promise<DatasetMeta> {
+  return fetch(`/api/datasets/${id}/crosstabs`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ crosstabs }),
+  }).then(handle<DatasetMeta>)
 }
 
 export function getDistinct(

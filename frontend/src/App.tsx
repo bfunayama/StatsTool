@@ -9,24 +9,39 @@ import { VariableEditor } from './components/VariableEditor'
 
 type Tab = 'variables' | 'filters' | 'crosstabs' | 'data'
 
+const LAST_DATASET_KEY = 'statstool.lastDataset'
+const LAST_TAB_KEY = 'statstool.lastTab'
+
 function App() {
-  const [datasetId, setDatasetId] = useState<string | null>(null)
+  const [datasetId, setDatasetId] = useState<string | null>(
+    () => localStorage.getItem(LAST_DATASET_KEY),
+  )
   const [meta, setMeta] = useState<DatasetMeta | null>(null)
-  const [tab, setTab] = useState<Tab>('variables')
+  const [tab, setTab] = useState<Tab>(
+    () => (localStorage.getItem(LAST_TAB_KEY) as Tab | null) ?? 'variables',
+  )
   const [dataFilter, setDataFilter] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!datasetId) {
       setMeta(null)
+      localStorage.removeItem(LAST_DATASET_KEY)
       return
     }
+    localStorage.setItem(LAST_DATASET_KEY, datasetId)
     getDataset(datasetId)
       .then(setMeta)
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : 'Failed to load dataset'),
-      )
+      .catch((err) => {
+        // The remembered dataset may have been deleted — fall back to the list.
+        setError(err instanceof Error ? err.message : 'Failed to load dataset')
+        setDatasetId(null)
+      })
   }, [datasetId])
+
+  useEffect(() => {
+    localStorage.setItem(LAST_TAB_KEY, tab)
+  }, [tab])
 
   return (
     <div className="app">
@@ -110,7 +125,7 @@ function App() {
           {tab === 'filters' && (
             <FiltersManager meta={meta} onChanged={setMeta} />
           )}
-          {tab === 'crosstabs' && <CrosstabView meta={meta} />}
+          {tab === 'crosstabs' && <CrosstabView meta={meta} onChanged={setMeta} />}
           {tab === 'data' && (
             <DataPreview datasetId={meta.id} filterId={dataFilter || undefined} />
           )}

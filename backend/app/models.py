@@ -147,6 +147,7 @@ class DatasetMeta(BaseModel):
     variables: list[Variable]
     questions: list["Question"] = Field(default_factory=list)
     filters: list["Filter"] = Field(default_factory=list)
+    crosstabs: list["CrosstabNode"] = Field(default_factory=list)
 
 
 class DatasetSummary(BaseModel):
@@ -310,5 +311,44 @@ class CrosstabResponse(BaseModel):
     row_kind: Literal["variable", "multi", "grid", "grid2d"]
 
 
+class CrosstabDisplay(BaseModel):
+    """Which statistics a saved crosstab shows (see CrosstabView)."""
+
+    cell_stats: list[str] = Field(default_factory=lambda: ["count", "col_pct"])
+    summary_rows: list[str] = Field(default_factory=lambda: ["base_n"])
+    summary_cols: list[str] = Field(default_factory=list)
+
+
+class SavedCrosstabSpec(BaseModel):
+    """Everything needed to reproduce a saved crosstab."""
+
+    row: CrosstabRowSpec
+    column: str
+    filter_id: str | None = None
+    display: CrosstabDisplay = Field(default_factory=CrosstabDisplay)
+
+
+class CrosstabNode(BaseModel):
+    """A node in the saved-crosstab tree: a folder or a saved crosstab.
+
+    Folders hold ``children``; crosstabs hold a ``spec``. ``version`` lets the
+    spec grow (nesting, weighting) while older saved tables still load.
+    """
+
+    id: str
+    name: str
+    kind: Literal["folder", "crosstab"]
+    children: list["CrosstabNode"] = Field(default_factory=list)
+    spec: SavedCrosstabSpec | None = None
+    version: int = 1
+
+
+class CrosstabsUpdate(BaseModel):
+    """Payload for saving the dataset's saved-crosstab tree."""
+
+    crosstabs: list[CrosstabNode]
+
+
 # DatasetMeta references Filter before it is defined; resolve the forward ref.
+CrosstabNode.model_rebuild()
 DatasetMeta.model_rebuild()

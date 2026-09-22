@@ -15,8 +15,10 @@ from .models import (
     BinaryRecode,
     BinaryRequest,
     CopyRequest,
+    CrosstabNode,
     CrosstabRequest,
     CrosstabResponse,
+    CrosstabsUpdate,
     DatasetMeta,
     DatasetSummary,
     DistinctResponse,
@@ -286,6 +288,31 @@ def crosstab(dataset_id: str, request: CrosstabRequest) -> CrosstabResponse:
         return crosstabbing.compute_crosstab(df, meta, request)
     except crosstabbing.CrosstabError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+def _collect_node_ids(nodes: list[CrosstabNode], seen: set[str]) -> None:
+    """Walk the crosstab tree, failing on duplicate ids or bad node shapes."""
+    for node in nodes:
+        if node.id in seen:
+            raise HTTPException(
+                status_code=400, detail=f"Duplicate crosstab id: {node.id}"
+            )
+        seen.add(node.id)
+        if node.kind == "crosstab" and node.spec is None:
+            raise HTTPException(
+                status_code=400, detail=f"Crosstab '{node.name}' has no spec."
+            )
+        _collect_node_ids(node.children, seen)
+
+
+@app.put("/api/datasets/{dataset_id}/crosstabs", response_model=DatasetMeta)
+def update_crosstabs(dataset_id: str, payload: CrosstabsUpdate) -> DatasetMeta:
+    """Save the dataset's saved-crosstab tree (folders + crosstabs)."""
+    meta, _ = _load(dataset_id)
+    _collect_node_ids(payload.crosstabs, set())
+    meta.crosstabs = payload.crosstabs
+    storage.save_meta(meta)
+    return meta
 
 
 @app.get("/api/datasets/{dataset_id}/preview", response_model=PreviewResponse)
