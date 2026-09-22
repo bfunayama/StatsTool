@@ -88,6 +88,53 @@ class Variable(BaseModel):
     source_name: str | None = None
     values: list[ValueAttribute] = Field(default_factory=list)
     recode: Recode | None = None
+    # Set when this column belongs to a detected matrix/grid question.
+    question_id: str | None = None
+
+
+class QuestionKind(str, Enum):
+    """Shape of a matrix/grid question."""
+
+    multi = "multi"  # pick-any: each column is one selectable option
+    grid = "grid"  # single-select matrix: columns share one categorical scale
+    grid2d = "grid2d"  # two-dimensional grid: each column is a (row, col) cell
+
+
+class AxisLabel(BaseModel):
+    """A row or column of a 2-D grid: a stable ``key`` and its display ``label``."""
+
+    key: str
+    label: str
+
+
+class QuestionItem(BaseModel):
+    """One member column of a question, with its display label.
+
+    For ``multi`` the label is the option; for ``grid`` it is the row/statement.
+    For ``grid2d`` ``row``/``col`` locate the cell in the matrix (axis keys).
+    """
+
+    column: str
+    label: str
+    row: str | None = None
+    col: str | None = None
+
+
+class Question(BaseModel):
+    """A matrix/grid question grouping several columns (a Displayr-style set).
+
+    Source columns stay intact as variables; a question is a view over them so the
+    grouping is reversible and existing features keep working.
+    """
+
+    id: str
+    name: str
+    label: str
+    kind: QuestionKind
+    items: list[QuestionItem] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)  # shared scale for grid
+    rows: list[AxisLabel] = Field(default_factory=list)  # grid2d row axis
+    columns: list[AxisLabel] = Field(default_factory=list)  # grid2d column axis
 
 
 class DatasetMeta(BaseModel):
@@ -98,6 +145,7 @@ class DatasetMeta(BaseModel):
     n_rows: int
     n_cols: int
     variables: list[Variable]
+    questions: list["Question"] = Field(default_factory=list)
     filters: list["Filter"] = Field(default_factory=list)
 
 
@@ -214,6 +262,12 @@ class FilterCountResponse(BaseModel):
 
     count: int
     total: int
+
+
+class QuestionsUpdate(BaseModel):
+    """Payload for saving the dataset's matrix/grid questions."""
+
+    questions: list[Question]
 
 
 # DatasetMeta references Filter before it is defined; resolve the forward ref.

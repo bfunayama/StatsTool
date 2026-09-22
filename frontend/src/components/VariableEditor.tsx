@@ -5,10 +5,13 @@ import {
   copyVariable,
   deleteVariable,
   getDistinct,
+  saveQuestions,
   updateVariables,
   type Band,
   type DatasetMeta,
   type DistinctValue,
+  type Question,
+  type QuestionKind,
   type Recode,
   type ValueAttribute,
   type Variable,
@@ -46,6 +49,7 @@ function valuesForRecode(recode: Recode): ValueAttribute[] {
 
 export function VariableEditor({ meta, onChanged }: Props) {
   const [variables, setVariables] = useState<Variable[]>(meta.variables)
+  const [questions, setQuestions] = useState<Question[]>(meta.questions ?? [])
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -57,17 +61,58 @@ export function VariableEditor({ meta, onChanged }: Props) {
   // Re-sync whenever the dataset metadata changes (save, create, delete).
   useEffect(() => {
     setVariables(meta.variables)
+    setQuestions(meta.questions ?? [])
     setDirty(false)
   }, [meta])
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return variables
-    return variables.filter(
-      (v) =>
-        v.name.toLowerCase().includes(q) || v.label.toLowerCase().includes(q),
-    )
-  }, [variables, search])
+  // One combined list: each question appears in place of its first column,
+  // the rest of its columns are hidden (merged into the question entry).
+  const rows = useMemo(() => {
+    const byColumn = new Map<string, Question>()
+    for (const q of questions)
+      for (const it of q.items) byColumn.set(it.column, q)
+
+    const built: Array<
+      { kind: 'variable'; variable: Variable } | { kind: 'question'; question: Question }
+    > = []
+    const emitted = new Set<string>()
+    for (const v of variables) {
+      const q = byColumn.get(v.name)
+      if (q) {
+        if (!emitted.has(q.id)) {
+          emitted.add(q.id)
+          built.push({ kind: 'question', question: q })
+        }
+        continue
+      }
+      built.push({ kind: 'variable', variable: v })
+    }
+
+    const term = search.trim().toLowerCase()
+    if (!term) return built
+    return built.filter((row) => {
+      if (row.kind === 'variable') {
+        const v = row.variable
+        return (
+          v.name.toLowerCase().includes(term) ||
+          v.label.toLowerCase().includes(term)
+        )
+      }
+      const q = row.question
+      return (
+        q.name.toLowerCase().includes(term) ||
+        q.label.toLowerCase().includes(term) ||
+        q.items.some(
+          (i) =>
+            i.column.toLowerCase().includes(term) ||
+            i.label.toLowerCase().includes(term),
+        )
+      )
+    })
+  }, [variables, questions, search])
+
+  const variableCount = rows.filter((r) => r.kind === 'variable').length
+  const questionCount = rows.filter((r) => r.kind === 'question').length
 
   function patchVariable(name: string, patch: Partial<Variable>) {
     setVariables((prev) =>
@@ -107,11 +152,72 @@ export function VariableEditor({ meta, onChanged }: Props) {
     setDirty(true)
   }
 
+  function patchQuestion(id: string, patch: Partial<Question>) {
+    setQuestions((prev) => prev.map((q) => (q.id === id ? { ...q, ...patch } : q)))
+    setDirty(true)
+  }
+
+  function patchQuestionItem(id: string, column: string, label: string) {
+    setQuestions((prev) =>
+      prev.map((q) =>
+        q.id === id
+          ? {
+              ...q,
+              items: q.items.map((i) =>
+                i.column === column ? { ...i, label } : i,
+              ),
+            }
+          : q,
+      ),
+    )
+    setDirty(true)
+  }
+
+  function patchQuestionAxis(
+    id: string,
+    axis: 'rows' | 'columns',
+    key: string,
+    label: string,
+  ) {
+    setQuestions((prev) =>
+      prev.map((q) =>
+        q.id === id
+          ? {
+              ...q,
+              [axis]: q[axis].map((a) => (a.key === key ? { ...a, label } : a)),
+            }
+          : q,
+      ),
+    )
+    setDirty(true)
+  }
+
+  function removeQuestionItem(id: string, column: string) {
+    setQuestions((prev) =>
+      prev.map((q) =>
+        q.id === id
+          ? { ...q, items: q.items.filter((i) => i.column !== column) }
+          : q,
+      ),
+    )
+    setDirty(true)
+  }
+
+  function ungroupQuestion(id: string) {
+    if (
+      !confirm('Ungroup this question? Its columns return to the variable list.')
+    )
+      return
+    setQuestions((prev) => prev.filter((q) => q.id !== id))
+    setDirty(true)
+  }
+
   async function save() {
     setSaving(true)
     setError(null)
     try {
-      onChanged(await updateVariables(meta.id, variables))
+      await updateVariables(meta.id, variables)
+      onChanged(await saveQuestions(meta.id, questions.filter((q) => q.items.length > 0)))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
     } finally {
@@ -138,7 +244,8 @@ export function VariableEditor({ meta, onChanged }: Props) {
           onChange={(e) => setSearch(e.target.value)}
         />
         <span className="muted">
-          {filtered.length} of {variables.length} variables
+          {variableCount} variables
+          {questionCount > 0 && `, ${questionCount} grouped variables`}
         </span>
         <span className="spacer" />
         {dirty && <span className="muted">Unsaved changes</span>}
@@ -165,7 +272,31 @@ export function VariableEditor({ meta, onChanged }: Props) {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((v) => {
+            {rows.map((row) => {
+              if (row.kind === 'question') {
+                const q = row.question
+                const key = `q:${q.id}`
+                const isOpen = expanded === key
+                return (
+                  <QuestionRow
+                    key={key}
+                    question={q}
+                    isOpen={isOpen}
+                    onToggle={() => setExpanded(isOpen ? null : key)}
+                    onLabel={(label) => patchQuestion(q.id, { label })}
+                    onKind={(kind) => patchQuestion(q.id, { kind })}
+                    onItemLabel={(column, label) =>
+                      patchQuestionItem(q.id, column, label)
+                    }
+                    onAxisLabel={(axis, key, label) =>
+                      patchQuestionAxis(q.id, axis, key, label)
+                    }
+                    onRemoveItem={(column) => removeQuestionItem(q.id, column)}
+                    onUngroup={() => ungroupQuestion(q.id)}
+                  />
+                )
+              }
+              const v = row.variable
               const isOpen = expanded === v.name
               return (
                 <VariableRow
@@ -233,6 +364,183 @@ interface RowProps {
   onBand: () => void
   onBinary: () => void
   onDelete: () => void
+}
+
+function QuestionRow({
+  question,
+  isOpen,
+  onToggle,
+  onLabel,
+  onKind,
+  onItemLabel,
+  onAxisLabel,
+  onRemoveItem,
+  onUngroup,
+}: {
+  question: Question
+  isOpen: boolean
+  onToggle: () => void
+  onLabel: (label: string) => void
+  onKind: (kind: QuestionKind) => void
+  onItemLabel: (column: string, label: string) => void
+  onAxisLabel: (axis: 'rows' | 'columns', key: string, label: string) => void
+  onRemoveItem: (column: string) => void
+  onUngroup: () => void
+}) {
+  return (
+    <>
+      <tr>
+        <td>
+          <button className="expand" onClick={onToggle} aria-label="Toggle columns">
+            {isOpen ? '▾' : '▸'}
+          </button>
+        </td>
+        <td className="var-name">
+          {question.name}
+          <span className="badge">grouped variable</span>
+        </td>
+        <td>
+          <input
+            className="cell-input"
+            value={question.label}
+            onChange={(e) => onLabel(e.target.value)}
+          />
+        </td>
+        <td>
+          <select
+            value={question.kind}
+            onChange={(e) => onKind(e.target.value as QuestionKind)}
+          >
+            <option value="multi">Pick any</option>
+            <option value="grid">Grid</option>
+            <option value="grid2d">Grid (2-D)</option>
+          </select>
+        </td>
+        <td>
+          <div className="row-actions">
+            <span className="muted">{question.items.length} cols</span>
+            <button className="danger" onClick={onUngroup}>
+              Ungroup
+            </button>
+          </div>
+        </td>
+      </tr>
+      {isOpen && (
+        <tr className="values-row">
+          <td />
+          <td colSpan={4}>
+            <div className="values-editor">
+              {question.kind === 'grid2d' ? (
+                <>
+                  <p className="muted">
+                    A two-dimensional grid: {question.rows.length} rows ×{' '}
+                    {question.columns.length} columns ({question.items.length} cells).
+                  </p>
+                  <div className="axis-tables">
+                    <AxisEditor
+                      title="Rows"
+                      axis="rows"
+                      labels={question.rows}
+                      onAxisLabel={onAxisLabel}
+                    />
+                    <AxisEditor
+                      title="Columns"
+                      axis="columns"
+                      labels={question.columns}
+                      onAxisLabel={onAxisLabel}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="muted">
+                    {question.kind === 'multi'
+                      ? 'Each column is one selectable option.'
+                      : 'Each column is a row/item; all share the scale below.'}
+                  </p>
+                  <table className="grid values" style={{ maxWidth: '44rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Column</th>
+                        <th>
+                          {question.kind === 'multi' ? 'Option label' : 'Row label'}
+                        </th>
+                        <th style={{ width: '3rem' }} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {question.items.map((it) => (
+                        <tr key={it.column}>
+                          <td className="var-name">{it.column}</td>
+                          <td>
+                            <input
+                              className="cell-input"
+                              value={it.label}
+                              onChange={(e) => onItemLabel(it.column, e.target.value)}
+                            />
+                          </td>
+                          <td>
+                            <button
+                              onClick={() => onRemoveItem(it.column)}
+                              title="Remove from question"
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+              {question.categories.length > 0 && (
+                <p className="muted" style={{ marginTop: '0.5rem' }}>
+                  Scale: {question.categories.join(' · ')}
+                </p>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function AxisEditor({
+  title,
+  axis,
+  labels,
+  onAxisLabel,
+}: {
+  title: string
+  axis: 'rows' | 'columns'
+  labels: { key: string; label: string }[]
+  onAxisLabel: (axis: 'rows' | 'columns', key: string, label: string) => void
+}) {
+  return (
+    <table className="grid values" style={{ maxWidth: '22rem' }}>
+      <thead>
+        <tr>
+          <th style={{ width: '3rem' }}>#</th>
+          <th>{title}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {labels.map((a) => (
+          <tr key={a.key}>
+            <td className="var-name">{a.key}</td>
+            <td>
+              <input
+                className="cell-input"
+                value={a.label}
+                onChange={(e) => onAxisLabel(axis, a.key, e.target.value)}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
 }
 
 function VariableRow({

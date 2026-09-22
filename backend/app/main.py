@@ -8,7 +8,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import compute, filters as filtering, ingest, storage
+from . import compute, detect, filters as filtering, ingest, storage
 from .models import (
     BandRecode,
     BandRequest,
@@ -23,6 +23,7 @@ from .models import (
     FilterCountResponse,
     FiltersUpdate,
     PreviewResponse,
+    QuestionsUpdate,
     Variable,
     VariablesUpdate,
     VariableType,
@@ -75,6 +76,8 @@ async def upload_dataset(file: UploadFile) -> DatasetMeta:
         n_cols=int(df.shape[1]),
         variables=ingest.infer_variables(df),
     )
+    meta.questions = detect.detect_questions(df, meta.variables)
+    detect.apply_membership(meta.variables, meta.questions)
     storage.create_dataset(df, meta)
     return meta
 
@@ -92,6 +95,30 @@ def update_variables(dataset_id: str, payload: VariablesUpdate) -> DatasetMeta:
     meta, df = _load(dataset_id)
     _validate_variables(payload.variables, df)
     meta.variables = payload.variables
+    # Questions are the source of truth for membership; keep tags in step.
+    detect.apply_membership(meta.variables, meta.questions)
+    storage.save_meta(meta)
+    return meta
+
+
+@app.put("/api/datasets/{dataset_id}/questions", response_model=DatasetMeta)
+def update_questions(dataset_id: str, payload: QuestionsUpdate) -> DatasetMeta:
+    """Save the dataset's matrix/grid questions (rename, retype, ungroup, edit)."""
+    meta, _ = _load(dataset_id)
+    names = {v.name for v in meta.variables}
+    seen_ids: set[str] = set()
+    for q in payload.questions:
+        if q.id in seen_ids:
+            raise HTTPException(status_code=400, detail=f"Duplicate question id: {q.id}")
+        seen_ids.add(q.id)
+        for item in q.items:
+            if item.column not in names:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown column in question '{q.label}': {item.column}",
+                )
+    meta.questions = payload.questions
+    detect.apply_membership(meta.variables, meta.questions)
     storage.save_meta(meta)
     return meta
 

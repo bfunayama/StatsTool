@@ -81,6 +81,12 @@ select {
   flex: 1;
 }
 
+.axis-tables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
 .tabs {
   display: flex;
   align-items: center;

@@ -42,6 +42,32 @@ export interface Variable {
   source_name: string | null
   values: ValueAttribute[]
   recode: Recode | null
+  question_id?: string | null
+}
+
+export type QuestionKind = 'multi' | 'grid' | 'grid2d'
+
+export interface QuestionItem {
+  column: string
+  label: string
+  row?: string | null
+  col?: string | null
+}
+
+export interface AxisLabel {
+  key: string
+  label: string
+}
+
+export interface Question {
+  id: string
+  name: string
+  label: string
+  kind: QuestionKind
+  items: QuestionItem[]
+  categories: string[]
+  rows: AxisLabel[]
+  columns: AxisLabel[]
 }
 
 export interface DatasetMeta {
@@ -50,6 +76,7 @@ export interface DatasetMeta {
   n_rows: number
   n_cols: number
   variables: Variable[]
+  questions: Question[]
   filters: Filter[]
 }
 
@@ -181,6 +208,17 @@ export function saveFilters(
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filters }),
+  }).then(handle<DatasetMeta>)
+}
+
+export function saveQuestions(
+  id: string,
+  questions: Question[],
+): Promise<DatasetMeta> {
+  return fetch(`/api/datasets/${id}/questions`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ questions }),
   }).then(handle<DatasetMeta>)
 }
 
