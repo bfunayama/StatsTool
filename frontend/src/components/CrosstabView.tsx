@@ -402,7 +402,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const activeSummaryCols = SUMMARY_COL_STATS.filter((s) =>
     summaryCols.has(s.key),
   )
-  const showCellLabels = cellStats.size > 1
+  const cellStatLabels = CELL_STATS.filter((s) => cellStats.has(s.key)).map(
+    (s) => s.label,
+  )
 
   function toggleCollapse(id: string) {
     setCollapsed((prev) => {
@@ -426,6 +428,20 @@ export function CrosstabView({ meta, onChanged }: Props) {
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
+  }
+
+  // Swap the row and column. Only works when the row is a plain variable,
+  // because a grouped (Pick any) variable cannot sit in the column banner.
+  const canSwap = (() => {
+    const row = decodeRow(rowValue)
+    return !!colValue && !!row && row.kind === 'variable'
+  })()
+
+  function swapRowColumn() {
+    const row = decodeRow(rowValue)
+    if (!row || row.kind !== 'variable' || !colValue) return
+    setRowValue(`v:${colValue}`)
+    setColValue(row.ref)
   }
 
   function renderNodes(nodes: CrosstabNode[], depth: number) {
@@ -606,6 +622,18 @@ export function CrosstabView({ meta, onChanged }: Props) {
             ))}
           </select>
         </label>
+        <button
+          className="ct-swap"
+          onClick={swapRowColumn}
+          disabled={!canSwap}
+          title={
+            canSwap
+              ? 'Switch rows and columns'
+              : 'Switching needs a plain variable in the row (grouped variables can’t be a column)'
+          }
+        >
+          ⇅ Switch Rows &amp; Columns
+        </button>
         <label className="field">
           Filter
           <select value={filterId} onChange={(e) => setFilterId(e.target.value)}>
@@ -678,7 +706,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <table className="grid crosstab">
             <thead>
               <tr>
-                <th />
+                <th className="ct-corner">
+                  {cellStatLabels.map((label) => (
+                    <span key={label} className="ct-legend-line">
+                      {label}
+                    </span>
+                  ))}
+                </th>
                 {result.columns.map((c) => (
                   <th key={c.label} className="ct-colhead">
                     {c.label}
@@ -705,9 +739,6 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       <td key={result.columns[ci].label} className="ct-cell">
                         {lines.map((ln) => (
                           <span key={ln.key} className="ct-stat-line">
-                            {showCellLabels && (
-                              <span className="ct-stat-tag">{ln.label}</span>
-                            )}
                             {ln.text}
                           </span>
                         ))}

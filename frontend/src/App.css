@@ -110,6 +110,11 @@ select {
 .ct-controls .spacer {
   display: none;
 }
+.ct-swap {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+}
 
 .crosstab th,
 .crosstab td {
@@ -129,10 +134,16 @@ select {
 .crosstab .ct-stat-line {
   display: block;
 }
-.crosstab .ct-stat-tag {
-  margin-right: 0.3rem;
-  font-size: 0.72rem;
+.crosstab .ct-corner {
+  text-align: left;
+  vertical-align: bottom;
   color: var(--muted);
+  font-weight: 400;
+  font-size: 0.78rem;
+}
+.crosstab .ct-legend-line {
+  display: block;
+  white-space: nowrap;
 }
 .crosstab .ct-summary,
 .crosstab .ct-summary-head {
