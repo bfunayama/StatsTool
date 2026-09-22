@@ -282,7 +282,7 @@ class CrosstabRequest(BaseModel):
     """Request a crosstab of one row source against one column variable."""
 
     row: CrosstabRowSpec
-    column: str  # column (banner) variable name
+    column: str | None = None  # None → a single "Total" banner (whole sample)
     filter_id: str | None = None  # optional saved filter to restrict respondents
 
 
@@ -323,7 +323,7 @@ class SavedCrosstabSpec(BaseModel):
     """Everything needed to reproduce a saved crosstab."""
 
     row: CrosstabRowSpec
-    column: str
+    column: str | None = None  # None → Total-sample table (no column)
     filter_id: str | None = None
     display: CrosstabDisplay = Field(default_factory=CrosstabDisplay)
 

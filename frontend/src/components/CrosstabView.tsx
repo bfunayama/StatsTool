@@ -37,6 +37,9 @@ const SUMMARY_COL_STATS: { key: SummaryColStat; label: string }[] = [
 // Total Sum / Mean only make sense when the row has numeric values.
 const NUMERIC_SUMMARY_ROW: Set<SummaryRowStat> = new Set(['total_sum', 'mean'])
 
+// Column value meaning "no crossing variable" — a single Total-sample banner.
+const TOTAL = '__total__'
+
 function fmtPct(value: number | null): string {
   return value === null ? '' : `${value.toFixed(1)}%`
 }
@@ -160,7 +163,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     if (!row || !colValue) return null
     return {
       row,
-      column: colValue,
+      column: colValue === TOTAL ? null : colValue,
       filter_id: filterId || null,
       display: {
         cell_stats: CELL_STATS.filter((s) => cellStats.has(s.key)).map((s) => s.key),
@@ -176,7 +179,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   function loadSpec(spec: SavedCrosstabSpec) {
     setRowValue(encodeRow(spec.row))
-    setColValue(spec.column)
+    setColValue(spec.column ?? TOTAL)
     setFilterId(spec.filter_id ?? '')
     setCellStats(new Set(spec.display.cell_stats as CellStat[]))
     setSummaryRows(new Set(spec.display.summary_rows as SummaryRowStat[]))
@@ -220,9 +223,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
   function newTable() {
     const spec = currentSpec()
     if (!spec) return
-    const auto = colValue
-      ? `${rowLabelFor(rowValue)} by ${colLabelFor(colValue)}`
-      : rowLabelFor(rowValue)
+    const auto =
+      colValue && colValue !== TOTAL
+        ? `${rowLabelFor(rowValue)} by ${colLabelFor(colValue)}`
+        : rowLabelFor(rowValue)
     const name = titleDraft.trim() || auto
     const node: CrosstabNode = {
       id: crypto.randomUUID(),
@@ -289,7 +293,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     let ignore = false
     setLoading(true)
     setError(null)
-    runCrosstab(meta.id, row, colValue, filterId || null)
+    runCrosstab(meta.id, row, colValue === TOTAL ? null : colValue, filterId || null)
       .then((res) => {
         if (!ignore) setResult(res)
       })
@@ -434,7 +438,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // because a grouped (Pick any) variable cannot sit in the column banner.
   const canSwap = (() => {
     const row = decodeRow(rowValue)
-    return !!colValue && !!row && row.kind === 'variable'
+    return !!colValue && colValue !== TOTAL && !!row && row.kind === 'variable'
   })()
 
   function swapRowColumn() {
@@ -615,6 +619,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
           Column
           <select value={colValue} onChange={(e) => setColValue(e.target.value)}>
             <option value="">Choose a variable…</option>
+            <option value={TOTAL}>Total sample (no column)</option>
             {memberless.map((v) => (
               <option key={v.name} value={v.name}>
                 {v.label}

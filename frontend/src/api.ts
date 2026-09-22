@@ -172,7 +172,7 @@ export interface CrosstabDisplay {
 
 export interface SavedCrosstabSpec {
   row: CrosstabRowSpec
-  column: string
+  column: string | null
   filter_id: string | null
   display: CrosstabDisplay
 }
@@ -279,12 +279,12 @@ export function filterCount(
 export function runCrosstab(
   id: string,
   row: CrosstabRowSpec,
-  column: string,
+  column: string | null,
   filterId?: string | null,
 ): Promise<CrosstabResponse> {
   return postJson(`/api/datasets/${id}/crosstab`, {
     row,
-    column,
+    column: column ?? null,
     filter_id: filterId ?? null,
   })
 }

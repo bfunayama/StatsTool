@@ -74,11 +74,20 @@ def compute_crosstab(
         mask = filtering.evaluate_filter(df, index, saved)
         df = df[mask]
 
-    col_var = index.get(request.column)
-    if col_var is None:
-        raise CrosstabError(f"Unknown column variable: {request.column}")
-    col_series = compute.compute_display_series(df, index, col_var)
-    col_labels = _ordered_categories(col_series, col_var)
+    # No column variable → a single "Total" banner covering the whole sample.
+    if not request.column:
+        banner: list[tuple[str, pd.Series]] = [
+            ("Total", pd.Series(True, index=df.index))
+        ]
+    else:
+        col_var = index.get(request.column)
+        if col_var is None:
+            raise CrosstabError(f"Unknown column variable: {request.column}")
+        col_series = compute.compute_display_series(df, index, col_var)
+        banner = [
+            (label, col_series == label)
+            for label in _ordered_categories(col_series, col_var)
+        ]
 
     if request.row.kind == "question":
         question = next((q for q in meta.questions if q.id == request.row.ref), None)
@@ -89,19 +98,26 @@ def compute_crosstab(
                 "Only Pick any grouped variables are supported as a crosstab row "
                 "so far."
             )
-        return _crosstab_multi(df, index, col_series, col_labels, question)
+        return _crosstab_multi(df, index, banner, question)
 
     row_var = index.get(request.row.ref)
     if row_var is None:
         raise CrosstabError(f"Unknown row variable: {request.row.ref}")
-    return _crosstab_variable(df, index, col_series, col_labels, row_var)
+    return _crosstab_variable(df, index, banner, row_var)
+
+
+def _union_mask(df: pd.DataFrame, banner: list[tuple[str, pd.Series]]) -> pd.Series:
+    """Respondents in any banner column (excludes those with a missing column)."""
+    total = pd.Series(False, index=df.index)
+    for _label, mask in banner:
+        total = total | mask
+    return total
 
 
 def _crosstab_variable(
     df: pd.DataFrame,
     index: dict[str, Variable],
-    col_series: pd.Series,
-    col_labels: list[str],
+    banner: list[tuple[str, pd.Series]],
     row_var: Variable,
 ) -> CrosstabResponse:
     row_series = compute.compute_display_series(df, index, row_var)
@@ -110,18 +126,17 @@ def _crosstab_variable(
 
     columns: list[CrosstabColumn] = []
     cells: list[list[CrosstabCell]] = [
-        [CrosstabCell(count=0.0) for _ in col_labels] for _ in row_labels
+        [CrosstabCell(count=0.0) for _ in banner] for _ in row_labels
     ]
-    for ci, category in enumerate(col_labels):
-        in_col = col_series == category
+    for ci, (label, in_col) in enumerate(banner):
         base = int((in_col & row_valid).sum())
-        columns.append(CrosstabColumn(label=category, base=float(base)))
-        for ri, label in enumerate(row_labels):
-            count = int((in_col & (row_series == label)).sum())
+        columns.append(CrosstabColumn(label=label, base=float(base)))
+        for ri, rlabel in enumerate(row_labels):
+            count = int((in_col & (row_series == rlabel)).sum())
             pct = (count / base * 100.0) if base else None
             cells[ri][ci] = CrosstabCell(count=float(count), column_pct=pct)
 
-    total_base = int((col_series.notna() & row_valid).sum())
+    total_base = int((_union_mask(df, banner) & row_valid).sum())
     return CrosstabResponse(
         row_labels=row_labels,
         row_values=_row_numeric_values(row_var, row_labels),
@@ -135,8 +150,7 @@ def _crosstab_variable(
 def _crosstab_multi(
     df: pd.DataFrame,
     index: dict[str, Variable],
-    col_series: pd.Series,
-    col_labels: list[str],
+    banner: list[tuple[str, pd.Series]],
     question: Question,
 ) -> CrosstabResponse:
     row_labels = [item.label for item in question.items]
@@ -156,18 +170,17 @@ def _crosstab_multi(
 
     columns: list[CrosstabColumn] = []
     cells: list[list[CrosstabCell]] = [
-        [CrosstabCell(count=0.0) for _ in col_labels] for _ in row_labels
+        [CrosstabCell(count=0.0) for _ in banner] for _ in row_labels
     ]
-    for ci, category in enumerate(col_labels):
-        in_col = col_series == category
+    for ci, (label, in_col) in enumerate(banner):
         base = int((in_col & answered).sum())
-        columns.append(CrosstabColumn(label=category, base=float(base)))
+        columns.append(CrosstabColumn(label=label, base=float(base)))
         for ri, mask in enumerate(selected):
             count = int((in_col & mask).sum())
             pct = (count / base * 100.0) if base else None
             cells[ri][ci] = CrosstabCell(count=float(count), column_pct=pct)
 
-    total_base = int((col_series.notna() & answered).sum())
+    total_base = int((_union_mask(df, banner) & answered).sum())
     return CrosstabResponse(
         row_labels=row_labels,
         row_values=[None for _ in row_labels],
