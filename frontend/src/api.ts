@@ -173,12 +173,15 @@ export interface CrosstabRowSpec {
 export interface CrosstabCell {
   count: number
   column_pct: number | null
+  sig_higher?: string[]
+  sig_arrow?: 'up' | 'down' | null
 }
 
 export interface CrosstabColumn {
   label: string
   base: number
   eff_base?: number | null
+  letter?: string | null
 }
 
 export interface CrosstabResponse {
@@ -196,6 +199,7 @@ export interface CrosstabDisplay {
   cell_stats: string[]
   summary_rows: string[]
   summary_cols: string[]
+  significance?: string[]
 }
 
 export interface CrosstabGroup {

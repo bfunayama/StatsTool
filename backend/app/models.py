@@ -378,6 +378,9 @@ class CrosstabCell(BaseModel):
 
     count: float
     column_pct: float | None = None  # count / column base, as a percentage
+    # Significance testing (column proportions, 95%):
+    sig_higher: list[str] = Field(default_factory=list)  # letters of columns beaten
+    sig_arrow: Literal["up", "down"] | None = None  # vs. rest of the sample
 
 
 class CrosstabColumn(BaseModel):
@@ -386,6 +389,7 @@ class CrosstabColumn(BaseModel):
     label: str
     base: float
     eff_base: float | None = None  # Kish effective sample size (weighted tables)
+    letter: str | None = None  # column id (A, B, C…) for significance letters
 
 
 class CrosstabResponse(BaseModel):
@@ -407,6 +411,7 @@ class CrosstabDisplay(BaseModel):
     cell_stats: list[str] = Field(default_factory=lambda: ["count", "col_pct"])
     summary_rows: list[str] = Field(default_factory=lambda: ["base_n"])
     summary_cols: list[str] = Field(default_factory=list)
+    significance: list[str] = Field(default_factory=list)  # "letters", "arrows"
 
 
 class SavedCrosstabSpec(BaseModel):

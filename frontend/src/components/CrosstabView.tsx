@@ -25,6 +25,7 @@ interface Props {
 type CellStat = 'count' | 'col_pct' | 'row_pct' | 'total_pct'
 type SummaryRowStat = 'base_n' | 'eff_n' | 'total_count' | 'total_sum' | 'mean'
 type SummaryColStat = 'row_n'
+type SigStat = 'letters' | 'arrows'
 
 const CELL_STATS: { key: CellStat; label: string }[] = [
   { key: 'count', label: 'Count' },
@@ -42,11 +43,61 @@ const SUMMARY_ROW_STATS: { key: SummaryRowStat; label: string }[] = [
 const SUMMARY_COL_STATS: { key: SummaryColStat; label: string }[] = [
   { key: 'row_n', label: 'Row n' },
 ]
+const SIG_STATS: { key: SigStat; label: string }[] = [
+  { key: 'arrows', label: 'Arrows (vs. rest)' },
+  { key: 'letters', label: 'Column letters' },
+]
 // Total Sum / Mean only make sense when the row has numeric values.
 const NUMERIC_SUMMARY_ROW: Set<SummaryRowStat> = new Set(['total_sum', 'mean'])
 
 // Column value meaning "no crossing variable" — a single Total-sample banner.
 const TOTAL = '__total__'
+
+const Z_CRIT_95 = 1.959963985 // two-tailed critical value at 95% confidence
+
+// Standard normal CDF (Abramowitz & Stegun 26.2.17); good to ~1e-7.
+function normalCdf(z: number): number {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z))
+  const d = 0.3989422804014327 * Math.exp((-z * z) / 2)
+  let p =
+    d *
+    t *
+    (0.31938153 +
+      t *
+        (-0.356563782 +
+          t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+  if (z > 0) p = 1 - p
+  return p
+}
+
+// Pooled two-proportion z statistic, or null when it cannot be computed.
+function twoPropZ(
+  p1: number,
+  n1: number,
+  p2: number,
+  n2: number,
+): number | null {
+  if (n1 <= 0 || n2 <= 0) return null
+  const pooled = (p1 * n1 + p2 * n2) / (n1 + n2)
+  const variance = pooled * (1 - pooled) * (1 / n1 + 1 / n2)
+  if (variance <= 0) return null
+  return (p1 - p2) / Math.sqrt(variance)
+}
+
+// Result of a manual cell-vs-cell significance test (or an error message).
+type SigTestResult =
+  | { error: string }
+  | {
+      labelA: string
+      labelB: string
+      pctA: number
+      pctB: number
+      nA: number
+      nB: number
+      z: number
+      p: number
+      significant: boolean
+    }
 
 function fmtPct(value: number | null): string {
   return value === null ? '' : `${value.toFixed(1)}%`
@@ -143,6 +194,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [summaryCols, setSummaryCols] = useState<Set<SummaryColStat>>(
     () => new Set<SummaryColStat>(),
   )
+  const [sig, setSig] = useState<Set<SigStat>>(() => new Set<SigStat>())
   // NET/merge groupings applied to the current table's rows and columns.
   const [rowGroups, setRowGroups] = useState<CrosstabGroup[]>([])
   const [columnGroups, setColumnGroups] = useState<CrosstabGroup[]>([])
@@ -154,6 +206,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Header multi-select (shift/cmd), inline rename, and hidden categories.
   const [selRows, setSelRows] = useState<Set<string>>(new Set())
   const [selCols, setSelCols] = useState<Set<string>>(new Set())
+  // Individual cell selection (⌘/Ctrl+click) for manual pairwise sig tests.
+  const [selCells, setSelCells] = useState<Set<string>>(new Set())
+  const [sigTest, setSigTest] = useState<SigTestResult | null>(null)
   const [anchorRow, setAnchorRow] = useState<string | null>(null)
   const [anchorCol, setAnchorCol] = useState<string | null>(null)
   const [headerEdit, setHeaderEdit] = useState<
@@ -212,6 +267,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
         summary_cols: SUMMARY_COL_STATS.filter((s) => summaryCols.has(s.key)).map(
           (s) => s.key,
         ),
+        significance: SIG_STATS.filter((s) => sig.has(s.key)).map((s) => s.key),
       },
       row_groups: rowGroups,
       column_groups: columnGroups,
@@ -230,6 +286,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setCellStats(new Set(spec.display.cell_stats as CellStat[]))
     setSummaryRows(new Set(spec.display.summary_rows as SummaryRowStat[]))
     setSummaryCols(new Set(spec.display.summary_cols as SummaryColStat[]))
+    setSig(new Set((spec.display.significance ?? []) as SigStat[]))
     setRowGroups(spec.row_groups ?? [])
     setColumnGroups(spec.column_groups ?? [])
     setRowRenames(spec.row_renames ?? {})
@@ -374,6 +431,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
       ignore = true
     }
   }, [meta.id, rowValue, colValue, filterId, weightId, rowGroups, columnGroups])
+
+  // A new/rebuilt table invalidates any cell selection (indices shift).
+  useEffect(() => {
+    setSelCells(new Set())
+  }, [result])
   // Row/column totals derived from cell counts (used for row %, total %, margins).
   const margins = useMemo(() => {
     if (!result) return null
@@ -418,6 +480,68 @@ export function CrosstabView({ meta, onChanged }: Props) {
       if (next.has(key)) next.delete(key)
       else next.add(key)
       return next
+    })
+  }
+
+  // ⌘/Ctrl+click a category cell to add/remove it from the manual test pair.
+  function toggleCell(ri: number, ci: number) {
+    const key = `${ri}:${ci}`
+    setSelCells((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // Two-proportion test between the two selected cells; result shown in a popup.
+  function runCellSigTest() {
+    if (!result || selCells.size !== 2) return
+    const [ka, kb] = [...selCells]
+    const [ra, ca] = ka.split(':').map(Number)
+    const [rb, cb] = kb.split(':').map(Number)
+    const fail = (error: string) => setSigTest({ error })
+    if (ca === cb) {
+      fail(
+        'A significance test could not be conducted between these cells — they are in the same column, so their bases are not independent.',
+      )
+      return
+    }
+    const overlaps = (ci: number) =>
+      columnGroups.some(
+        (g) => g.mode === 'net' && g.label === result.columns[ci].label,
+      )
+    if (overlaps(ca) || overlaps(cb)) {
+      fail(
+        'A significance test could not be conducted between these cells — NET columns overlap other columns, so the samples are not independent.',
+      )
+      return
+    }
+    const cellA = result.cells[ra][ca]
+    const cellB = result.cells[rb][cb]
+    const colA = result.columns[ca]
+    const colB = result.columns[cb]
+    if (cellA.column_pct == null || cellB.column_pct == null) {
+      fail('A significance test could not be conducted between these cells.')
+      return
+    }
+    const nA = result.weighted ? colA.eff_base ?? colA.base : colA.base
+    const nB = result.weighted ? colB.eff_base ?? colB.base : colB.base
+    const z = twoPropZ(cellA.column_pct / 100, nA, cellB.column_pct / 100, nB)
+    if (z == null) {
+      fail('A significance test could not be conducted between these cells.')
+      return
+    }
+    setSigTest({
+      labelA: `${dispRow(result.row_labels[ra])} · ${dispCol(colA.label)}`,
+      labelB: `${dispRow(result.row_labels[rb])} · ${dispCol(colB.label)}`,
+      pctA: cellA.column_pct,
+      pctB: cellB.column_pct,
+      nA,
+      nB,
+      z,
+      p: 2 * (1 - normalCdf(Math.abs(z))),
+      significant: Math.abs(z) >= Z_CRIT_95,
     })
   }
 
@@ -477,6 +601,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const cellStatLabels = CELL_STATS.filter((s) => cellStats.has(s.key)).map(
     (s) => s.label,
   )
+  const lettersOn = sig.has('letters')
+  const arrowsOn = sig.has('arrows')
+  const sigOn = (lettersOn || arrowsOn) && !!result && result.columns.length >= 2
   const rowGroupLabels = new Set(rowGroups.map((g) => g.label))
   const colGroupLabels = new Set(columnGroups.map((g) => g.label))
   // Display order of base categories, used to keep group labels readable.
@@ -1094,6 +1221,29 @@ export function CrosstabView({ meta, onChanged }: Props) {
             </label>
           ))}
         </fieldset>
+        <fieldset className="ct-stat-group">
+          <legend>Significance (95%)</legend>
+          {SIG_STATS.map((s) => {
+            const disabled = colValue === TOTAL
+            return (
+              <label
+                key={s.key}
+                className="ct-check"
+                title={
+                  disabled ? 'Needs a column variable (two or more columns)' : undefined
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={sig.has(s.key)}
+                  disabled={disabled}
+                  onChange={() => toggle(setSig, s.key)}
+                />
+                {s.label}
+              </label>
+            )
+          })}
+        </fieldset>
       </div>
 
       {error && <p className="error">{error}</p>}
@@ -1103,7 +1253,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <p className="muted" style={{ marginTop: 0 }}>
             Click headers (Shift or ⌘/Ctrl for multiple) then Merge or NET, or drag
             one header onto another. Double-click a header to rename; right-click to
-            hide, ungroup, or switch NET/merge.
+            hide, ungroup, or switch NET/merge. ⌘/Ctrl+click two cells to run a
+            significance test between them.
           </p>
           {(selRows.size >= 2 || selCols.size >= 2) && (
             <div className="ct-select-bar">
@@ -1123,6 +1274,24 @@ export function CrosstabView({ meta, onChanged }: Props) {
                   <button onClick={() => clearSel('col')}>Clear</button>
                 </span>
               )}
+            </div>
+          )}
+
+          {selCells.size > 0 && (
+            <div className="ct-select-bar">
+              <span className="ct-select-group">
+                <span className="muted">
+                  {selCells.size} cell{selCells.size === 1 ? '' : 's'} selected
+                  {selCells.size !== 2 ? ' (pick exactly 2)' : ''}
+                </span>
+                <button
+                  disabled={selCells.size !== 2}
+                  onClick={runCellSigTest}
+                >
+                  Sig test
+                </button>
+                <button onClick={() => setSelCells(new Set())}>Clear</button>
+              </span>
             </div>
           )}
 
@@ -1183,6 +1352,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           onDoubleClick={() => startHeaderEdit('col', c.label)}
                         >
                           {dispCol(c.label)}
+                          {sigOn && lettersOn && c.letter && (
+                            <span className="ct-col-letter">{c.letter}</span>
+                          )}
                         </span>
                       )}
                     </th>
@@ -1250,13 +1422,43 @@ export function CrosstabView({ meta, onChanged }: Props) {
                         result.columns[ci].base,
                         margins.rowTotals[ri],
                       )
+                      const arrow = arrowsOn ? cell.sig_arrow : null
+                      const beats =
+                        lettersOn && cell.sig_higher ? cell.sig_higher : []
+                      const cellKey = `${ri}:${ci}`
                       return (
-                        <td key={result.columns[ci].label} className="ct-cell">
+                        <td
+                          key={result.columns[ci].label}
+                          className={`ct-cell${
+                            selCells.has(cellKey) ? ' ct-cell-selected' : ''
+                          }`}
+                          onClick={(e) => {
+                            if (e.metaKey || e.ctrlKey) {
+                              e.preventDefault()
+                              toggleCell(ri, ci)
+                            }
+                          }}
+                        >
                           {lines.map((ln) => (
                             <span key={ln.key} className="ct-stat-line">
                               {ln.text}
                             </span>
                           ))}
+                          {sigOn && (arrow || beats.length > 0) && (
+                            <span className="ct-sig-line">
+                              {arrow === 'up' && (
+                                <span className="ct-arrow ct-arrow-up">▲</span>
+                              )}
+                              {arrow === 'down' && (
+                                <span className="ct-arrow ct-arrow-down">▼</span>
+                              )}
+                              {beats.length > 0 && (
+                                <span className="ct-sig-letters">
+                                  {beats.join(' ')}
+                                </span>
+                              )}
+                            </span>
+                          )}
                         </td>
                       )
                     })}
@@ -1319,6 +1521,24 @@ export function CrosstabView({ meta, onChanged }: Props) {
               <>Unweighted, Total sample = {fmtCount(result.total_base)}</>
             )}
           </p>
+
+          {sigOn && (
+            <p className="ct-sig-legend">
+              Significance at 95%:{' '}
+              {arrowsOn && (
+                <>
+                  <span className="ct-arrow ct-arrow-up">▲</span>/
+                  <span className="ct-arrow ct-arrow-down">▼</span> = higher/lower
+                  than the rest of the sample
+                </>
+              )}
+              {arrowsOn && lettersOn && '; '}
+              {lettersOn && (
+                <>letters = columns this cell is significantly higher than</>
+              )}
+              .
+            </p>
+          )}
 
           {(rowGroups.length > 0 || columnGroups.length > 0) && (
             <div className="ct-groups-panel">
@@ -1452,6 +1672,54 @@ export function CrosstabView({ meta, onChanged }: Props) {
           )
         })()}
       </div>
+
+      {sigTest && (
+        <div className="modal-backdrop" onClick={() => setSigTest(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Significance test</h3>
+              <button
+                className="expand"
+                onClick={() => setSigTest(null)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            {'error' in sigTest ? (
+              <p className="error">{sigTest.error}</p>
+            ) : (
+              <>
+                <p className="muted">
+                  Two-proportion test of the two selected cells (column %):
+                </p>
+                <ul className="sig-compare">
+                  <li>
+                    {sigTest.labelA}: <strong>{sigTest.pctA.toFixed(1)}%</strong>{' '}
+                    (n = {Math.round(sigTest.nA)})
+                  </li>
+                  <li>
+                    {sigTest.labelB}: <strong>{sigTest.pctB.toFixed(1)}%</strong>{' '}
+                    (n = {Math.round(sigTest.nB)})
+                  </li>
+                </ul>
+                <p className={sigTest.significant ? 'sig-yes' : 'sig-no'}>
+                  <strong>
+                    {sigTest.significant ? 'Significant' : 'Not significant'}
+                  </strong>{' '}
+                  at the 95% confidence level (z = {sigTest.z.toFixed(2)}, p ={' '}
+                  {sigTest.p < 0.001 ? '< 0.001' : sigTest.p.toFixed(3)}).
+                </p>
+              </>
+            )}
+            <div className="modal-actions">
+              <button className="primary" onClick={() => setSigTest(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

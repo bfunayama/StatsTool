@@ -134,6 +134,58 @@ select {
 .crosstab .ct-stat-line {
   display: block;
 }
+.crosstab .ct-sig-line {
+  display: block;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.crosstab .ct-arrow {
+  font-weight: 700;
+}
+.crosstab .ct-arrow-up {
+  color: #1a7f37;
+}
+.crosstab .ct-arrow-down {
+  color: #c1121f;
+}
+.crosstab .ct-sig-letters {
+  color: var(--muted);
+  margin-left: 0.15rem;
+  vertical-align: super;
+  font-size: 0.65rem;
+}
+.crosstab .ct-col-letter {
+  color: var(--muted);
+  font-weight: 700;
+  margin-left: 0.25rem;
+  font-size: 0.78rem;
+}
+.ct-sig-legend {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.crosstab .ct-cell {
+  cursor: default;
+}
+.crosstab .ct-cell-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.sig-compare {
+  margin: 0.25rem 0 0.75rem;
+  padding-left: 1.1rem;
+}
+.sig-compare li {
+  margin: 0.15rem 0;
+}
+.sig-yes {
+  color: #1a7f37;
+}
+.sig-no {
+  color: var(--muted);
+}
 .crosstab .ct-corner {
   text-align: left;
   vertical-align: bottom;

@@ -9,6 +9,8 @@ multi-dimensional, which would make the table 3-D).
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 from . import compute, filters as filtering
@@ -188,7 +190,18 @@ def _assemble(
     def wsum(mask: pd.Series) -> float:
         return float(weights[mask].sum()) if weighted else float(int(mask.sum()))
 
+    # Effective sample size drives significance variance (actual n when unweighted).
+    def n_of(mask: pd.Series) -> float:
+        return compute.effective_n(weights[mask]) if weighted else float(int(mask.sum()))
+
+    union = pd.Series(False, index=index)
+    for _label, mask, _value in banner:
+        union = union | mask
+    valid = union & row_valid
+
     columns: list[CrosstabColumn] = []
+    col_valids: list[pd.Series] = []
+    col_n: list[float] = []  # sample size for the significance test
     cells: list[list[CrosstabCell]] = [
         [CrosstabCell(count=0.0) for _ in banner] for _ in rows
     ]
@@ -197,15 +210,16 @@ def _assemble(
         base = wsum(col_valid)
         eff = compute.effective_n(weights[col_valid]) if weighted else None
         columns.append(CrosstabColumn(label=label, base=base, eff_base=eff))
+        col_valids.append(col_valid)
+        col_n.append(n_of(col_valid))
         for ri, (_rlabel, row_mask, _rv) in enumerate(rows):
             count = wsum(in_col & row_mask)
             pct = (count / base * 100.0) if base else None
             cells[ri][ci] = CrosstabCell(count=count, column_pct=pct)
 
-    union = pd.Series(False, index=index)
-    for _label, mask, _value in banner:
-        union = union | mask
-    valid = union & row_valid
+    if len(banner) >= 2:
+        _add_significance(banner, rows, cells, columns, col_valids, col_n, valid, wsum, n_of)
+
     total_base = wsum(valid)
     total_eff = compute.effective_n(weights[valid]) if weighted else None
     return CrosstabResponse(
@@ -218,3 +232,91 @@ def _assemble(
         weighted=weighted,
         row_kind=row_kind,
     )
+
+
+_Z_CRIT = 1.959963985  # two-tailed critical value at 95% confidence
+
+
+def _column_letters(count: int) -> list[str]:
+    """Spreadsheet-style column ids: A, B, …, Z, AA, AB, … for ``count`` columns."""
+    result: list[str] = []
+    for i in range(count):
+        label, x = "", i
+        while True:
+            label = chr(65 + x % 26) + label
+            x = x // 26 - 1
+            if x < 0:
+                break
+        result.append(label)
+    return result
+
+
+def _two_prop_z(p1: float, n1: float, p2: float, n2: float) -> float | None:
+    """Pooled two-proportion z statistic, or None when it cannot be computed."""
+    if n1 <= 0 or n2 <= 0:
+        return None
+    pooled = (p1 * n1 + p2 * n2) / (n1 + n2)
+    var = pooled * (1.0 - pooled) * (1.0 / n1 + 1.0 / n2)
+    if var <= 0:
+        return None
+    return (p1 - p2) / math.sqrt(var)
+
+
+def _add_significance(
+    banner: list[tuple[str, pd.Series, float | None]],
+    rows: list[tuple[str, pd.Series, float | None]],
+    cells: list[list[CrosstabCell]],
+    columns: list[CrosstabColumn],
+    col_valids: list[pd.Series],
+    col_n: list[float],
+    valid: pd.Series,
+    wsum,
+    n_of,
+) -> None:
+    """Column-proportion significance at 95%: A/B/C letters and up/down arrows.
+
+    Letters mark the columns a cell is significantly *greater* than. Arrows
+    compare each cell to the rest of the sample (▲ higher, ▼ lower).
+    """
+    for col, letter in zip(columns, _column_letters(len(columns))):
+        col.letter = letter
+
+    props = [
+        [None if c.column_pct is None else c.column_pct / 100.0 for c in row]
+        for row in cells
+    ]
+
+    for ri, (_rlabel, row_mask, _rv) in enumerate(rows):
+        for ci in range(len(columns)):
+            p = props[ri][ci]
+            if p is None:
+                continue
+            rest = valid & ~banner[ci][1]
+            base_rest = wsum(rest)
+            n_rest = n_of(rest)
+            if base_rest <= 0 or n_rest <= 0:
+                continue
+            p_rest = wsum(row_mask & rest) / base_rest
+            z = _two_prop_z(p, col_n[ci], p_rest, n_rest)
+            if z is not None and abs(z) >= _Z_CRIT:
+                cells[ri][ci].sig_arrow = "up" if z > 0 else "down"
+
+        for j in range(len(columns)):
+            pj = props[ri][j]
+            if pj is None:
+                continue
+            beaten: list[str] = []
+            for k in range(len(columns)):
+                if k == j:
+                    continue
+                pk = props[ri][k]
+                if pk is None or pj <= pk:
+                    continue
+                z = _two_prop_z(pj, col_n[j], pk, col_n[k])
+                if z is not None and z >= _Z_CRIT:
+                    letter = columns[k].letter
+                    if letter is not None:
+                        beaten.append(letter)
+            if beaten:
+                cells[ri][j].sig_higher = beaten
+
