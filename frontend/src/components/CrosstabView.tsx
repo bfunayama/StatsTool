@@ -88,10 +88,11 @@ function twoPropZ(
 type SigTestResult =
   | { error: string }
   | {
+      kind: 'proportion' | 'mean'
       labelA: string
       labelB: string
-      pctA: number
-      pctB: number
+      valueA: number
+      valueB: number
       nA: number
       nB: number
       z: number
@@ -483,9 +484,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
     })
   }
 
-  // ⌘/Ctrl+click a category cell to add/remove it from the manual test pair.
-  function toggleCell(ri: number, ci: number) {
-    const key = `${ri}:${ci}`
+  // ⌘/Ctrl+click a cell (category or Mean) to add/remove it from the test pair.
+  function toggleSel(key: string) {
     setSelCells((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
@@ -494,24 +494,101 @@ export function CrosstabView({ meta, onChanged }: Props) {
     })
   }
 
-  // Two-proportion test between the two selected cells; result shown in a popup.
+  // Per-column mean, sample variance, and (effective) n from the frequency table.
+  function columnMeanStats(
+    ci: number,
+  ): { mean: number; variance: number; n: number } | null {
+    if (!result) return null
+    let sw = 0
+    let swx = 0
+    let swx2 = 0
+    for (let ri = 0; ri < result.row_values.length; ri++) {
+      const v = result.row_values[ri]
+      if (v == null) continue
+      const f = result.cells[ri][ci].count
+      sw += f
+      swx += f * v
+      swx2 += f * v * v
+    }
+    if (sw <= 0) return null
+    const mean = swx / sw
+    const popVar = Math.max(0, swx2 / sw - mean * mean)
+    const col = result.columns[ci]
+    const n = result.weighted
+      ? col.base
+        ? (col.eff_base ?? col.base) * (sw / col.base)
+        : 0
+      : sw
+    if (n <= 1) return null
+    return { mean, variance: (popVar * n) / (n - 1), n }
+  }
+
+  const netOverlap = (ci: number) =>
+    !!result &&
+    columnGroups.some(
+      (g) => g.mode === 'net' && g.label === result.columns[ci].label,
+    )
+
+  // Compare the two selected cells; two %s → proportion test, two Means → mean
+  // test. Result (or an error) is shown in a popup.
   function runCellSigTest() {
     if (!result || selCells.size !== 2) return
     const [ka, kb] = [...selCells]
+    const fail = (error: string) => setSigTest({ error })
+    const isMean = (k: string) => k.startsWith('mean:')
+
+    if (isMean(ka) !== isMean(kb)) {
+      fail(
+        'A significance test could not be conducted — select two cells of the same kind (two percentages, or two Means).',
+      )
+      return
+    }
+
+    if (isMean(ka)) {
+      const ca = Number(ka.slice(5))
+      const cb = Number(kb.slice(5))
+      if (netOverlap(ca) || netOverlap(cb)) {
+        fail(
+          'A significance test could not be conducted between these cells — NET columns overlap other columns, so the samples are not independent.',
+        )
+        return
+      }
+      const a = columnMeanStats(ca)
+      const b = columnMeanStats(cb)
+      if (!a || !b) {
+        fail('A significance test could not be conducted between these means.')
+        return
+      }
+      const se = Math.sqrt(a.variance / a.n + b.variance / b.n)
+      if (!(se > 0)) {
+        fail('A significance test could not be conducted between these means.')
+        return
+      }
+      const z = (a.mean - b.mean) / se
+      setSigTest({
+        kind: 'mean',
+        labelA: `Mean · ${dispCol(result.columns[ca].label)}`,
+        labelB: `Mean · ${dispCol(result.columns[cb].label)}`,
+        valueA: a.mean,
+        valueB: b.mean,
+        nA: a.n,
+        nB: b.n,
+        z,
+        p: 2 * (1 - normalCdf(Math.abs(z))),
+        significant: Math.abs(z) >= Z_CRIT_95,
+      })
+      return
+    }
+
     const [ra, ca] = ka.split(':').map(Number)
     const [rb, cb] = kb.split(':').map(Number)
-    const fail = (error: string) => setSigTest({ error })
     if (ca === cb) {
       fail(
         'A significance test could not be conducted between these cells — they are in the same column, so their bases are not independent.',
       )
       return
     }
-    const overlaps = (ci: number) =>
-      columnGroups.some(
-        (g) => g.mode === 'net' && g.label === result.columns[ci].label,
-      )
-    if (overlaps(ca) || overlaps(cb)) {
+    if (netOverlap(ca) || netOverlap(cb)) {
       fail(
         'A significance test could not be conducted between these cells — NET columns overlap other columns, so the samples are not independent.',
       )
@@ -533,10 +610,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
       return
     }
     setSigTest({
+      kind: 'proportion',
       labelA: `${dispRow(result.row_labels[ra])} · ${dispCol(colA.label)}`,
       labelB: `${dispRow(result.row_labels[rb])} · ${dispCol(colB.label)}`,
-      pctA: cellA.column_pct,
-      pctB: cellB.column_pct,
+      valueA: cellA.column_pct,
+      valueB: cellB.column_pct,
       nA,
       nB,
       z,
@@ -1254,7 +1332,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
             Click headers (Shift or ⌘/Ctrl for multiple) then Merge or NET, or drag
             one header onto another. Double-click a header to rename; right-click to
             hide, ungroup, or switch NET/merge. ⌘/Ctrl+click two cells to run a
-            significance test between them.
+            significance test between them (two percentages, or two Mean cells).
           </p>
           {(selRows.size >= 2 || selCols.size >= 2) && (
             <div className="ct-select-bar">
@@ -1435,7 +1513,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           onClick={(e) => {
                             if (e.metaKey || e.ctrlKey) {
                               e.preventDefault()
-                              toggleCell(ri, ci)
+                              toggleSel(cellKey)
                             }
                           }}
                         >
@@ -1473,14 +1551,32 @@ export function CrosstabView({ meta, onChanged }: Props) {
               {activeSummaryRows.map((s) => (
                 <tr key={s.key} className="ct-summary-row">
                   <th className="ct-rowhead ct-summary">{s.label}</th>
-                  {visColIdx.map((ci) => (
-                    <td
-                      key={result.columns[ci].label}
-                      className="ct-cell ct-summary"
-                    >
-                      {summaryRowValue(s.key, ci)}
-                    </td>
-                  ))}
+                  {visColIdx.map((ci) => {
+                    const selectable = s.key === 'mean'
+                    const meanKey = `mean:${ci}`
+                    return (
+                      <td
+                        key={result.columns[ci].label}
+                        className={`ct-cell ct-summary${
+                          selectable && selCells.has(meanKey)
+                            ? ' ct-cell-selected'
+                            : ''
+                        }`}
+                        onClick={
+                          selectable
+                            ? (e) => {
+                                if (e.metaKey || e.ctrlKey) {
+                                  e.preventDefault()
+                                  toggleSel(meanKey)
+                                }
+                              }
+                            : undefined
+                        }
+                      >
+                        {summaryRowValue(s.key, ci)}
+                      </td>
+                    )
+                  })}
                   {activeSummaryCols.map((sc) => (
                     <td key={sc.key} className="ct-cell ct-summary">
                       {summaryRowCorner(s.key)}
@@ -1691,15 +1787,27 @@ export function CrosstabView({ meta, onChanged }: Props) {
             ) : (
               <>
                 <p className="muted">
-                  Two-proportion test of the two selected cells (column %):
+                  {sigTest.kind === 'mean'
+                    ? 'Two-sample test of the two selected column means:'
+                    : 'Two-proportion test of the two selected cells (column %):'}
                 </p>
                 <ul className="sig-compare">
                   <li>
-                    {sigTest.labelA}: <strong>{sigTest.pctA.toFixed(1)}%</strong>{' '}
+                    {sigTest.labelA}:{' '}
+                    <strong>
+                      {sigTest.kind === 'mean'
+                        ? sigTest.valueA.toFixed(2)
+                        : `${sigTest.valueA.toFixed(1)}%`}
+                    </strong>{' '}
                     (n = {Math.round(sigTest.nA)})
                   </li>
                   <li>
-                    {sigTest.labelB}: <strong>{sigTest.pctB.toFixed(1)}%</strong>{' '}
+                    {sigTest.labelB}:{' '}
+                    <strong>
+                      {sigTest.kind === 'mean'
+                        ? sigTest.valueB.toFixed(2)
+                        : `${sigTest.valueB.toFixed(1)}%`}
+                    </strong>{' '}
                     (n = {Math.round(sigTest.nB)})
                   </li>
                 </ul>
