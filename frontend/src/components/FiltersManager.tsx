@@ -53,6 +53,17 @@ function operatorsFor(type: string): Operator[] {
   return type === 'numeric' ? NUMERIC_OPS : CATEGORY_OPS
 }
 
+function logicLabel(f: Filter): string {
+  if (f.conditions.length <= 1) return '—'
+  const fallback = f.match === 'all' ? 'and' : 'or'
+  const connectors = f.conditions
+    .slice(1)
+    .map((c) => c.connector ?? fallback)
+  if (connectors.every((x) => x === 'and')) return 'All (AND)'
+  if (connectors.every((x) => x === 'or')) return 'Any (OR)'
+  return 'Mixed (AND/OR)'
+}
+
 export function FiltersManager({ meta, onChanged }: Props) {
   const [editing, setEditing] = useState<Filter | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -120,7 +131,7 @@ export function FiltersManager({ meta, onChanged }: Props) {
             <tr>
               <th>Name</th>
               <th>Conditions</th>
-              <th>Match</th>
+              <th>Logic</th>
               <th />
             </tr>
           </thead>
@@ -129,7 +140,7 @@ export function FiltersManager({ meta, onChanged }: Props) {
               <tr key={f.id}>
                 <td>{f.name}</td>
                 <td>{f.conditions.length}</td>
-                <td>{f.match === 'all' ? 'All (AND)' : 'Any (OR)'}</td>
+                <td>{logicLabel(f)}</td>
                 <td>
                   <div className="row-actions">
                     <button onClick={() => setEditing(f)}>Edit</button>

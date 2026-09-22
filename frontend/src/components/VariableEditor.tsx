@@ -166,7 +166,6 @@ export function VariableEditor({ meta, onChanged }: Props) {
           </thead>
           <tbody>
             {filtered.map((v) => {
-              const canExpand = v.values.length > 0 || v.recode !== null
               const isOpen = expanded === v.name
               return (
                 <VariableRow
@@ -174,11 +173,8 @@ export function VariableEditor({ meta, onChanged }: Props) {
                   variable={v}
                   datasetId={meta.id}
                   isOpen={isOpen}
-                  canExpand={canExpand}
                   dirty={dirty}
-                  onToggle={() =>
-                    setExpanded(isOpen ? null : canExpand ? v.name : null)
-                  }
+                  onToggle={() => setExpanded(isOpen ? null : v.name)}
                   onLabel={(label) => patchVariable(v.name, { label })}
                   onType={(type) => patchVariable(v.name, { type })}
                   onValuePatch={(i, patch) => patchValue(v.name, i, patch)}
@@ -227,7 +223,6 @@ interface RowProps {
   variable: Variable
   datasetId: string
   isOpen: boolean
-  canExpand: boolean
   dirty: boolean
   onToggle: () => void
   onLabel: (label: string) => void
@@ -244,7 +239,6 @@ function VariableRow({
   variable,
   datasetId,
   isOpen,
-  canExpand,
   dirty,
   onToggle,
   onLabel,
@@ -265,11 +259,9 @@ function VariableRow({
     <>
       <tr>
         <td>
-          {canExpand && (
-            <button className="expand" onClick={onToggle} aria-label="Toggle values">
-              {isOpen ? '▾' : '▸'}
-            </button>
-          )}
+          <button className="expand" onClick={onToggle} aria-label="Toggle values">
+            {isOpen ? '▾' : '▸'}
+          </button>
         </td>
         <td className="var-name">
           {variable.name}
@@ -296,6 +288,7 @@ function VariableRow({
         </td>
         <td>
           <div className="row-actions">
+            <button onClick={onToggle}>{isOpen ? 'Hide' : 'View'}</button>
             <button onClick={onCopy} disabled={dirty} title={disabledTitle}>
               Copy
             </button>
@@ -327,7 +320,11 @@ function VariableRow({
           <td />
           <td colSpan={4}>
             {variable.recode === null ? (
-              <ValueAttributesEditor variable={variable} onValuePatch={onValuePatch} />
+              variable.values.length > 0 ? (
+                <ValueAttributesEditor variable={variable} onValuePatch={onValuePatch} />
+              ) : (
+                <RawValuesView datasetId={datasetId} variableName={variable.name} />
+              )
             ) : variable.recode.kind === 'band' ? (
               <BandInlineEditor recode={variable.recode} onRecode={onRecode} />
             ) : (
@@ -401,6 +398,69 @@ function ValueAttributesEditor({
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function RawValuesView({
+  datasetId,
+  variableName,
+}: {
+  datasetId: string
+  variableName: string
+}) {
+  const [values, setValues] = useState<DistinctValue[] | null>(null)
+  const [state, setState] = useState<'loading' | 'error' | 'idle'>('loading')
+
+  useEffect(() => {
+    let ignore = false
+    setState('loading')
+    setValues(null)
+    getDistinct(datasetId, variableName)
+      .then((d) => {
+        if (ignore) return
+        setValues(d.values)
+        setState('idle')
+      })
+      .catch(() => {
+        if (ignore) return
+        setState('error')
+      })
+    return () => {
+      ignore = true
+    }
+  }, [datasetId, variableName])
+
+  return (
+    <div className="values-editor">
+      <p className="muted">
+        Distinct values found in this variable (read-only). This variable has no
+        value labels — copy it and add labels, or band it, to relabel.
+      </p>
+      {state === 'loading' ? (
+        <p className="muted">Loading values…</p>
+      ) : state === 'error' ? (
+        <p className="error">Couldn't load values.</p>
+      ) : values && values.length === 0 ? (
+        <p className="muted">No values to show.</p>
+      ) : (
+        <table className="grid values" style={{ maxWidth: '30rem' }}>
+          <thead>
+            <tr>
+              <th>Value</th>
+              <th style={{ width: '8rem' }}>Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(values ?? []).map((d) => (
+              <tr key={d.value}>
+                <td>{d.value}</td>
+                <td className="muted">{d.count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }
