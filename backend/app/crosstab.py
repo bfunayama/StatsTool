@@ -15,10 +15,10 @@ from . import compute, filters as filtering
 from .models import (
     CrosstabCell,
     CrosstabColumn,
+    CrosstabGroup,
     CrosstabRequest,
     CrosstabResponse,
     DatasetMeta,
-    Question,
     QuestionKind,
     Variable,
 )
@@ -74,10 +74,11 @@ def compute_crosstab(
         mask = filtering.evaluate_filter(df, index, saved)
         df = df[mask]
 
-    # No column variable → a single "Total" banner covering the whole sample.
+    # Banner columns as (label, respondent mask, unused value). Total = one
+    # all-true column when there is no column variable.
     if not request.column:
-        banner: list[tuple[str, pd.Series]] = [
-            ("Total", pd.Series(True, index=df.index))
+        banner: list[tuple[str, pd.Series, float | None]] = [
+            ("Total", pd.Series(True, index=df.index), None)
         ]
     else:
         col_var = index.get(request.column)
@@ -85,10 +86,13 @@ def compute_crosstab(
             raise CrosstabError(f"Unknown column variable: {request.column}")
         col_series = compute.compute_display_series(df, index, col_var)
         banner = [
-            (label, col_series == label)
+            (label, col_series == label, None)
             for label in _ordered_categories(col_series, col_var)
         ]
+    banner = _apply_groups(banner, request.column_groups, df.index)
 
+    # Rows as (label, respondent mask, numeric value|None) plus the "valid answer"
+    # mask that sets every column's base (grouping never changes the base).
     if request.row.kind == "question":
         question = next((q for q in meta.questions if q.id == request.row.ref), None)
         if question is None:
@@ -98,94 +102,100 @@ def compute_crosstab(
                 "Only Pick any grouped variables are supported as a crosstab row "
                 "so far."
             )
-        return _crosstab_multi(df, index, banner, question)
+        rows: list[tuple[str, pd.Series, float | None]] = []
+        row_valid = pd.Series(False, index=df.index)
+        for item in question.items:
+            member = index.get(item.column)
+            selected = (
+                compute.compute_display_series(df, index, member).notna()
+                if member is not None
+                else pd.Series(False, index=df.index)
+            )
+            rows.append((item.label, selected, None))
+            row_valid = row_valid | selected
+        row_kind = "multi"
+    else:
+        row_var = index.get(request.row.ref)
+        if row_var is None:
+            raise CrosstabError(f"Unknown row variable: {request.row.ref}")
+        row_series = compute.compute_display_series(df, index, row_var)
+        labels = _ordered_categories(row_series, row_var)
+        values = _row_numeric_values(row_var, labels)
+        rows = [(lbl, row_series == lbl, val) for lbl, val in zip(labels, values)]
+        row_valid = row_series.notna()
+        row_kind = "variable"
+    rows = _apply_groups(rows, request.row_groups, df.index)
 
-    row_var = index.get(request.row.ref)
-    if row_var is None:
-        raise CrosstabError(f"Unknown row variable: {request.row.ref}")
-    return _crosstab_variable(df, index, banner, row_var)
+    return _assemble(df.index, banner, rows, row_valid, row_kind)
 
 
-def _union_mask(df: pd.DataFrame, banner: list[tuple[str, pd.Series]]) -> pd.Series:
-    """Respondents in any banner column (excludes those with a missing column)."""
-    total = pd.Series(False, index=df.index)
-    for _label, mask in banner:
-        total = total | mask
-    return total
+def _combine(masks: dict[str, pd.Series], members: list[str], index) -> pd.Series:
+    """Union of member respondent masks (correct for overlapping pick-any options)."""
+    total: pd.Series | None = None
+    for member in members:
+        mask = masks.get(member)
+        if mask is None:
+            continue
+        total = mask if total is None else (total | mask)
+    return total if total is not None else pd.Series(False, index=index)
 
 
-def _crosstab_variable(
-    df: pd.DataFrame,
-    index: dict[str, Variable],
-    banner: list[tuple[str, pd.Series]],
-    row_var: Variable,
+def _apply_groups(
+    items: list[tuple[str, pd.Series, float | None]],
+    groups: list[CrosstabGroup],
+    index,
+) -> list[tuple[str, pd.Series, float | None]]:
+    """Apply merges (replace members in place) then append nets (subtotals)."""
+    masks = {label: mask for label, mask, _value in items}
+    member_to_merge: dict[str, CrosstabGroup] = {}
+    for group in (g for g in groups if g.mode == "merge"):
+        for member in group.members:
+            member_to_merge.setdefault(member, group)
+
+    result: list[tuple[str, pd.Series, float | None]] = []
+    emitted: set[str] = set()
+    for label, mask, value in items:
+        group = member_to_merge.get(label)
+        if group is not None:
+            if group.id not in emitted:
+                emitted.add(group.id)
+                result.append((group.label, _combine(masks, group.members, index), None))
+            continue
+        result.append((label, mask, value))
+
+    for group in (g for g in groups if g.mode == "net"):
+        result.append((group.label, _combine(masks, group.members, index), None))
+    return result
+
+
+def _assemble(
+    index,
+    banner: list[tuple[str, pd.Series, float | None]],
+    rows: list[tuple[str, pd.Series, float | None]],
+    row_valid: pd.Series,
+    row_kind: str,
 ) -> CrosstabResponse:
-    row_series = compute.compute_display_series(df, index, row_var)
-    row_labels = _ordered_categories(row_series, row_var)
-    row_valid = row_series.notna()
-
     columns: list[CrosstabColumn] = []
     cells: list[list[CrosstabCell]] = [
-        [CrosstabCell(count=0.0) for _ in banner] for _ in row_labels
+        [CrosstabCell(count=0.0) for _ in banner] for _ in rows
     ]
-    for ci, (label, in_col) in enumerate(banner):
+    for ci, (label, in_col, _cv) in enumerate(banner):
         base = int((in_col & row_valid).sum())
         columns.append(CrosstabColumn(label=label, base=float(base)))
-        for ri, rlabel in enumerate(row_labels):
-            count = int((in_col & (row_series == rlabel)).sum())
+        for ri, (_rlabel, row_mask, _rv) in enumerate(rows):
+            count = int((in_col & row_mask).sum())
             pct = (count / base * 100.0) if base else None
             cells[ri][ci] = CrosstabCell(count=float(count), column_pct=pct)
 
-    total_base = int((_union_mask(df, banner) & row_valid).sum())
+    union = pd.Series(False, index=index)
+    for _label, mask, _value in banner:
+        union = union | mask
+    total_base = int((union & row_valid).sum())
     return CrosstabResponse(
-        row_labels=row_labels,
-        row_values=_row_numeric_values(row_var, row_labels),
+        row_labels=[label for label, _m, _v in rows],
+        row_values=[value for _l, _m, value in rows],
         columns=columns,
         cells=cells,
         total_base=float(total_base),
-        row_kind="variable",
-    )
-
-
-def _crosstab_multi(
-    df: pd.DataFrame,
-    index: dict[str, Variable],
-    banner: list[tuple[str, pd.Series]],
-    question: Question,
-) -> CrosstabResponse:
-    row_labels = [item.label for item in question.items]
-    # Each option is "selected" when its member column has a non-missing value.
-    selected: list[pd.Series] = []
-    for item in question.items:
-        member = index.get(item.column)
-        if member is None:
-            selected.append(pd.Series(False, index=df.index))
-            continue
-        member_series = compute.compute_display_series(df, index, member)
-        selected.append(member_series.notna())
-
-    answered = selected[0].copy() if selected else pd.Series(False, index=df.index)
-    for mask in selected[1:]:
-        answered = answered | mask
-
-    columns: list[CrosstabColumn] = []
-    cells: list[list[CrosstabCell]] = [
-        [CrosstabCell(count=0.0) for _ in banner] for _ in row_labels
-    ]
-    for ci, (label, in_col) in enumerate(banner):
-        base = int((in_col & answered).sum())
-        columns.append(CrosstabColumn(label=label, base=float(base)))
-        for ri, mask in enumerate(selected):
-            count = int((in_col & mask).sum())
-            pct = (count / base * 100.0) if base else None
-            cells[ri][ci] = CrosstabCell(count=float(count), column_pct=pct)
-
-    total_base = int((_union_mask(df, banner) & answered).sum())
-    return CrosstabResponse(
-        row_labels=row_labels,
-        row_values=[None for _ in row_labels],
-        columns=columns,
-        cells=cells,
-        total_base=float(total_base),
-        row_kind="multi",
+        row_kind=row_kind,
     )

@@ -278,12 +278,29 @@ class CrosstabRowSpec(BaseModel):
     ref: str  # variable name, or question id when kind == "question"
 
 
+class CrosstabGroup(BaseModel):
+    """A NET or merge of several row/column categories.
+
+    ``members`` are underlying category labels. ``merge`` replaces those
+    categories with one combined category; ``net`` adds a subtotal while keeping
+    the originals. Combining uses the union of respondents, so it is correct for
+    pick-any rows (a respondent in two merged options is counted once).
+    """
+
+    id: str
+    label: str
+    members: list[str]
+    mode: Literal["net", "merge"]
+
+
 class CrosstabRequest(BaseModel):
     """Request a crosstab of one row source against one column variable."""
 
     row: CrosstabRowSpec
     column: str | None = None  # None → a single "Total" banner (whole sample)
     filter_id: str | None = None  # optional saved filter to restrict respondents
+    row_groups: list[CrosstabGroup] = Field(default_factory=list)
+    column_groups: list[CrosstabGroup] = Field(default_factory=list)
 
 
 class CrosstabCell(BaseModel):
@@ -326,6 +343,13 @@ class SavedCrosstabSpec(BaseModel):
     column: str | None = None  # None → Total-sample table (no column)
     filter_id: str | None = None
     display: CrosstabDisplay = Field(default_factory=CrosstabDisplay)
+    row_groups: list[CrosstabGroup] = Field(default_factory=list)
+    column_groups: list[CrosstabGroup] = Field(default_factory=list)
+    # Display-only overrides (do not affect computation).
+    row_renames: dict[str, str] = Field(default_factory=dict)
+    column_renames: dict[str, str] = Field(default_factory=dict)
+    row_hidden: list[str] = Field(default_factory=list)
+    column_hidden: list[str] = Field(default_factory=list)
 
 
 class CrosstabNode(BaseModel):

@@ -170,11 +170,24 @@ export interface CrosstabDisplay {
   summary_cols: string[]
 }
 
+export interface CrosstabGroup {
+  id: string
+  label: string
+  members: string[]
+  mode: 'net' | 'merge'
+}
+
 export interface SavedCrosstabSpec {
   row: CrosstabRowSpec
   column: string | null
   filter_id: string | null
   display: CrosstabDisplay
+  row_groups: CrosstabGroup[]
+  column_groups: CrosstabGroup[]
+  row_renames: Record<string, string>
+  column_renames: Record<string, string>
+  row_hidden: string[]
+  column_hidden: string[]
 }
 
 export interface CrosstabNode {
@@ -278,14 +291,20 @@ export function filterCount(
 
 export function runCrosstab(
   id: string,
-  row: CrosstabRowSpec,
-  column: string | null,
-  filterId?: string | null,
+  req: {
+    row: CrosstabRowSpec
+    column: string | null
+    filterId?: string | null
+    rowGroups?: CrosstabGroup[]
+    columnGroups?: CrosstabGroup[]
+  },
 ): Promise<CrosstabResponse> {
   return postJson(`/api/datasets/${id}/crosstab`, {
-    row,
-    column: column ?? null,
-    filter_id: filterId ?? null,
+    row: req.row,
+    column: req.column ?? null,
+    filter_id: req.filterId ?? null,
+    row_groups: req.rowGroups ?? [],
+    column_groups: req.columnGroups ?? [],
   })
 }
 

@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import {
   runCrosstab,
   saveCrosstabs,
+  type CrosstabGroup,
   type CrosstabNode,
   type CrosstabResponse,
   type CrosstabRowSpec,
@@ -126,6 +133,27 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [summaryCols, setSummaryCols] = useState<Set<SummaryColStat>>(
     () => new Set<SummaryColStat>(),
   )
+  // NET/merge groupings applied to the current table's rows and columns.
+  const [rowGroups, setRowGroups] = useState<CrosstabGroup[]>([])
+  const [columnGroups, setColumnGroups] = useState<CrosstabGroup[]>([])
+  // Drag-and-drop + right-click state for building/undoing groups.
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [menu, setMenu] = useState<
+    { x: number; y: number; dim: 'row' | 'col'; label: string } | null
+  >(null)
+  // Header multi-select (shift/cmd), inline rename, and hidden categories.
+  const [selRows, setSelRows] = useState<Set<string>>(new Set())
+  const [selCols, setSelCols] = useState<Set<string>>(new Set())
+  const [anchorRow, setAnchorRow] = useState<string | null>(null)
+  const [anchorCol, setAnchorCol] = useState<string | null>(null)
+  const [headerEdit, setHeaderEdit] = useState<
+    { dim: 'row' | 'col'; label: string } | null
+  >(null)
+  const [headerDraft, setHeaderDraft] = useState('')
+  const [rowRenames, setRowRenames] = useState<Record<string, string>>({})
+  const [colRenames, setColRenames] = useState<Record<string, string>>({})
+  const [rowHidden, setRowHidden] = useState<Set<string>>(new Set())
+  const [colHidden, setColHidden] = useState<Set<string>>(new Set())
 
   // Saved-crosstab tree (folders + saved tables), persisted on the dataset.
   const [tree, setTree] = useState<CrosstabNode[]>(meta.crosstabs ?? [])
@@ -174,6 +202,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
           (s) => s.key,
         ),
       },
+      row_groups: rowGroups,
+      column_groups: columnGroups,
+      row_renames: rowRenames,
+      column_renames: colRenames,
+      row_hidden: [...rowHidden],
+      column_hidden: [...colHidden],
     }
   }
 
@@ -184,6 +218,17 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setCellStats(new Set(spec.display.cell_stats as CellStat[]))
     setSummaryRows(new Set(spec.display.summary_rows as SummaryRowStat[]))
     setSummaryCols(new Set(spec.display.summary_cols as SummaryColStat[]))
+    setRowGroups(spec.row_groups ?? [])
+    setColumnGroups(spec.column_groups ?? [])
+    setRowRenames(spec.row_renames ?? {})
+    setColRenames(spec.column_renames ?? {})
+    setRowHidden(new Set(spec.row_hidden ?? []))
+    setColHidden(new Set(spec.column_hidden ?? []))
+    setSelRows(new Set())
+    setSelCols(new Set())
+    setAnchorRow(null)
+    setAnchorCol(null)
+    setHeaderEdit(null)
   }
 
   const selectedNode = selectedId ? findNode(tree, selectedId) : null
@@ -293,7 +338,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
     let ignore = false
     setLoading(true)
     setError(null)
-    runCrosstab(meta.id, row, colValue === TOTAL ? null : colValue, filterId || null)
+    runCrosstab(meta.id, {
+      row,
+      column: colValue === TOTAL ? null : colValue,
+      filterId: filterId || null,
+      rowGroups,
+      columnGroups,
+    })
       .then((res) => {
         if (!ignore) setResult(res)
       })
@@ -309,7 +360,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return () => {
       ignore = true
     }
-  }, [meta.id, rowValue, colValue, filterId])
+  }, [meta.id, rowValue, colValue, filterId, rowGroups, columnGroups])
 
   // Row/column totals derived from cell counts (used for row %, total %, margins).
   const margins = useMemo(() => {
@@ -409,6 +460,36 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const cellStatLabels = CELL_STATS.filter((s) => cellStats.has(s.key)).map(
     (s) => s.label,
   )
+  const rowGroupLabels = new Set(rowGroups.map((g) => g.label))
+  const colGroupLabels = new Set(columnGroups.map((g) => g.label))
+  // Display order of base categories, used to keep group labels readable.
+  const rowOrder = new Map<string, number>()
+  const colOrder = new Map<string, number>()
+  if (result) {
+    let i = 0
+    for (const l of result.row_labels)
+      if (!rowGroupLabels.has(l)) rowOrder.set(l, i++)
+    let j = 0
+    for (const c of result.columns)
+      if (!colGroupLabels.has(c.label)) colOrder.set(c.label, j++)
+  }
+  // Visible (not hidden) row/column indices into the result.
+  const visColIdx = result
+    ? result.columns
+        .map((_c, i) => i)
+        .filter((i) => !colHidden.has(result.columns[i].label))
+    : []
+  const visRowIdx = result
+    ? result.row_labels
+        .map((_l, i) => i)
+        .filter((i) => !rowHidden.has(result.row_labels[i]))
+    : []
+  const hiddenRowList = result
+    ? result.row_labels.filter((l) => rowHidden.has(l))
+    : []
+  const hiddenColList = result
+    ? result.columns.map((c) => c.label).filter((l) => colHidden.has(l))
+    : []
 
   function toggleCollapse(id: string) {
     setCollapsed((prev) => {
@@ -446,6 +527,284 @@ export function CrosstabView({ meta, onChanged }: Props) {
     if (!row || row.kind !== 'variable' || !colValue) return
     setRowValue(`v:${colValue}`)
     setColValue(row.ref)
+    // The variables trade places, so their groupings follow.
+    setRowGroups(columnGroups)
+    setColumnGroups(rowGroups)
+    setRowRenames(colRenames)
+    setColRenames(rowRenames)
+    setRowHidden(colHidden)
+    setColHidden(rowHidden)
+    setSelRows(new Set())
+    setSelCols(new Set())
+  }
+
+  // Changing a variable invalidates that dimension's groupings.
+  function changeRow(value: string) {
+    setRowValue(value)
+    setRowGroups([])
+    setRowRenames({})
+    setRowHidden(new Set())
+    setSelRows(new Set())
+    setAnchorRow(null)
+  }
+
+  function changeColumn(value: string) {
+    setColValue(value)
+    setColumnGroups([])
+    setColRenames({})
+    setColHidden(new Set())
+    setSelCols(new Set())
+    setAnchorCol(null)
+  }
+
+  function uniqueGroupLabel(base: string, existing: CrosstabGroup[]): string {
+    const labels = new Set(existing.map((g) => g.label))
+    if (!labels.has(base)) return base
+    let n = 2
+    while (labels.has(`${base} ${n}`)) n += 1
+    return `${base} ${n}`
+  }
+
+  function autoLabel(
+    members: string[],
+    mode: 'net' | 'merge',
+    order: Map<string, number>,
+  ): string {
+    if (mode === 'net') return 'NET'
+    return [...members]
+      .sort((a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9))
+      .join(' / ')
+  }
+
+  // Add a category to a group, refreshing an auto-generated (not renamed) label.
+  function withMember(
+    g: CrosstabGroup,
+    member: string,
+    order: Map<string, number>,
+  ): CrosstabGroup {
+    if (g.members.includes(member)) return g
+    const members = [...g.members, member]
+    const wasAuto = g.label === autoLabel(g.members, g.mode, order)
+    return { ...g, members, label: wasAuto ? autoLabel(members, g.mode, order) : g.label }
+  }
+
+  // Drop the dragged header `source` onto `target` within one dimension.
+  function applyDrop(dim: 'row' | 'col', source: string, target: string) {
+    if (source === target) return
+    const groups = dim === 'row' ? rowGroups : columnGroups
+    const setGroups = dim === 'row' ? setRowGroups : setColumnGroups
+    const order = dim === 'row' ? rowOrder : colOrder
+    // Dragging a member of a multi-selection merges the whole selection.
+    const sel = dim === 'row' ? selRows : selCols
+    if (sel.size >= 2 && sel.has(source)) {
+      const tg = groups.find((g) => g.label === target)
+      if (tg) {
+        let next = tg
+        for (const m of sel) next = withMember(next, m, order)
+        setGroups(groups.map((g) => (g.id === tg.id ? next : g)))
+      } else {
+        createGroupFromMembers(dim, [...sel, target], 'merge')
+      }
+      clearSel(dim)
+      return
+    }
+    const sg = groups.find((g) => g.label === source)
+    const tg = groups.find((g) => g.label === target)
+    if (!sg && !tg) {
+      const members = [source, target].sort(
+        (a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9),
+      )
+      const label = uniqueGroupLabel(autoLabel(members, 'merge', order), groups)
+      setGroups([
+        ...groups,
+        { id: crypto.randomUUID(), label, members, mode: 'merge' },
+      ])
+    } else if (sg && !tg) {
+      setGroups(groups.map((g) => (g.id === sg.id ? withMember(g, target, order) : g)))
+    } else if (!sg && tg) {
+      setGroups(groups.map((g) => (g.id === tg.id ? withMember(g, source, order) : g)))
+    } else if (sg && tg && sg.id !== tg.id) {
+      const members = Array.from(new Set([...sg.members, ...tg.members]))
+      const wasAuto = sg.label === autoLabel(sg.members, sg.mode, order)
+      setGroups(
+        groups
+          .filter((g) => g.id !== tg.id)
+          .map((g) =>
+            g.id === sg.id
+              ? {
+                  ...g,
+                  members,
+                  label: wasAuto ? autoLabel(members, g.mode, order) : g.label,
+                }
+              : g,
+          ),
+      )
+    }
+  }
+
+  function startDrag(e: ReactDragEvent, dim: 'row' | 'col', label: string) {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ dim, label }))
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  function onDropHeader(e: ReactDragEvent, dim: 'row' | 'col', target: string) {
+    e.preventDefault()
+    setDropTarget(null)
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'))
+      if (data && data.dim === dim) applyDrop(dim, data.label, target)
+    } catch {
+      // ignore malformed drops
+    }
+  }
+
+  function ungroup(dim: 'row' | 'col', label: string) {
+    if (dim === 'row') setRowGroups(rowGroups.filter((g) => g.label !== label))
+    else setColumnGroups(columnGroups.filter((g) => g.label !== label))
+  }
+
+  function toggleGroupMode(dim: 'row' | 'col', label: string) {
+    const order = dim === 'row' ? rowOrder : colOrder
+    const flip = (g: CrosstabGroup): CrosstabGroup => {
+      if (g.label !== label) return g
+      const mode = g.mode === 'net' ? 'merge' : 'net'
+      const wasAuto = g.label === autoLabel(g.members, g.mode, order)
+      return { ...g, mode, label: wasAuto ? autoLabel(g.members, mode, order) : g.label }
+    }
+    if (dim === 'row') setRowGroups(rowGroups.map(flip))
+    else setColumnGroups(columnGroups.map(flip))
+  }
+
+  function dispRow(l: string): string {
+    return rowRenames[l] ?? l
+  }
+  function dispCol(l: string): string {
+    return colRenames[l] ?? l
+  }
+
+  // Header click selection: shift = range from anchor, cmd/ctrl = toggle.
+  function selectHeader(
+    dim: 'row' | 'col',
+    label: string,
+    e: ReactMouseEvent,
+  ) {
+    const sel = dim === 'row' ? selRows : selCols
+    const setSel = dim === 'row' ? setSelRows : setSelCols
+    const anchor = dim === 'row' ? anchorRow : anchorCol
+    const setAnchor = dim === 'row' ? setAnchorRow : setAnchorCol
+    const order = dim === 'row' ? rowOrder : colOrder
+    if (e.shiftKey && anchor && order.has(anchor) && order.has(label)) {
+      const a = order.get(anchor) as number
+      const b = order.get(label) as number
+      const [lo, hi] = a < b ? [a, b] : [b, a]
+      const next = new Set(sel)
+      for (const [l, i] of order) if (i >= lo && i <= hi) next.add(l)
+      setSel(next)
+    } else if (e.metaKey || e.ctrlKey) {
+      const next = new Set(sel)
+      if (next.has(label)) next.delete(label)
+      else next.add(label)
+      setSel(next)
+      setAnchor(label)
+    } else {
+      setSel(new Set([label]))
+      setAnchor(label)
+    }
+  }
+
+  function clearSel(dim: 'row' | 'col') {
+    if (dim === 'row') {
+      setSelRows(new Set())
+      setAnchorRow(null)
+    } else {
+      setSelCols(new Set())
+      setAnchorCol(null)
+    }
+  }
+
+  function createGroupFromMembers(
+    dim: 'row' | 'col',
+    members: string[],
+    mode: 'net' | 'merge',
+  ) {
+    if (members.length < 2) return
+    const groups = dim === 'row' ? rowGroups : columnGroups
+    const setGroups = dim === 'row' ? setRowGroups : setColumnGroups
+    const order = dim === 'row' ? rowOrder : colOrder
+    const ordered = [...new Set(members)].sort(
+      (a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9),
+    )
+    const label = uniqueGroupLabel(autoLabel(ordered, mode, order), groups)
+    setGroups([...groups, { id: crypto.randomUUID(), label, members: ordered, mode }])
+    clearSel(dim)
+  }
+
+  function mergeSelected(dim: 'row' | 'col') {
+    createGroupFromMembers(dim, [...(dim === 'row' ? selRows : selCols)], 'merge')
+  }
+
+  function netSelected(dim: 'row' | 'col') {
+    createGroupFromMembers(dim, [...(dim === 'row' ? selRows : selCols)], 'net')
+  }
+
+  function startHeaderEdit(dim: 'row' | 'col', label: string) {
+    setHeaderEdit({ dim, label })
+    setHeaderDraft(dim === 'row' ? dispRow(label) : dispCol(label))
+  }
+
+  function commitHeaderEdit() {
+    if (!headerEdit) return
+    const { dim, label } = headerEdit
+    const draft = headerDraft.trim()
+    const isGroup = (dim === 'row' ? rowGroupLabels : colGroupLabels).has(label)
+    if (isGroup) {
+      const groups = dim === 'row' ? rowGroups : columnGroups
+      const setGroups = dim === 'row' ? setRowGroups : setColumnGroups
+      setGroups(
+        groups.map((g) => (g.label === label ? { ...g, label: draft || g.label } : g)),
+      )
+    } else {
+      const ren = dim === 'row' ? rowRenames : colRenames
+      const setRen = dim === 'row' ? setRowRenames : setColRenames
+      const next = { ...ren }
+      if (!draft || draft === label) delete next[label]
+      else next[label] = draft
+      setRen(next)
+    }
+    setHeaderEdit(null)
+  }
+
+  function hideItem(dim: 'row' | 'col', label: string) {
+    if (dim === 'row') setRowHidden(new Set([...rowHidden, label]))
+    else setColHidden(new Set([...colHidden, label]))
+  }
+
+  function unhide(dim: 'row' | 'col', label: string) {
+    if (dim === 'row') {
+      const next = new Set(rowHidden)
+      next.delete(label)
+      setRowHidden(next)
+    } else {
+      const next = new Set(colHidden)
+      next.delete(label)
+      setColHidden(next)
+    }
+  }
+
+  function removeRowGroup(id: string) {
+    setRowGroups(rowGroups.filter((g) => g.id !== id))
+  }
+
+  function removeColGroup(id: string) {
+    setColumnGroups(columnGroups.filter((g) => g.id !== id))
+  }
+
+  function renameRowGroup(id: string, label: string) {
+    setRowGroups(rowGroups.map((g) => (g.id === id ? { ...g, label } : g)))
+  }
+
+  function renameColGroup(id: string, label: string) {
+    setColumnGroups(columnGroups.map((g) => (g.id === id ? { ...g, label } : g)))
   }
 
   function renderNodes(nodes: CrosstabNode[], depth: number) {
@@ -595,7 +954,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
         <div className="ct-controls">
         <label className="field">
           Row
-          <select value={rowValue} onChange={(e) => setRowValue(e.target.value)}>
+          <select value={rowValue} onChange={(e) => changeRow(e.target.value)}>
             <option value="">Choose a variable…</option>
             {multiQuestions.length > 0 && (
               <optgroup label="Grouped (Pick any)">
@@ -617,7 +976,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
         </label>
         <label className="field">
           Column
-          <select value={colValue} onChange={(e) => setColValue(e.target.value)}>
+          <select value={colValue} onChange={(e) => changeColumn(e.target.value)}>
             <option value="">Choose a variable…</option>
             <option value={TOTAL}>Total sample (no column)</option>
             {memberless.map((v) => (
@@ -707,7 +1066,34 @@ export function CrosstabView({ meta, onChanged }: Props) {
       {error && <p className="error">{error}</p>}
 
       {result && margins && (
-        <div className="table-scroll">
+        <>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Click headers (Shift or ⌘/Ctrl for multiple) then Merge or NET, or drag
+            one header onto another. Double-click a header to rename; right-click to
+            hide, ungroup, or switch NET/merge.
+          </p>
+          {(selRows.size >= 2 || selCols.size >= 2) && (
+            <div className="ct-select-bar">
+              {selRows.size >= 2 && (
+                <span className="ct-select-group">
+                  <span className="muted">{selRows.size} rows selected</span>
+                  <button onClick={() => mergeSelected('row')}>Merge</button>
+                  <button onClick={() => netSelected('row')}>NET</button>
+                  <button onClick={() => clearSel('row')}>Clear</button>
+                </span>
+              )}
+              {selCols.size >= 2 && (
+                <span className="ct-select-group">
+                  <span className="muted">{selCols.size} columns selected</span>
+                  <button onClick={() => mergeSelected('col')}>Merge</button>
+                  <button onClick={() => netSelected('col')}>NET</button>
+                  <button onClick={() => clearSel('col')}>Clear</button>
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="table-scroll">
           <table className="grid crosstab">
             <thead>
               <tr>
@@ -718,11 +1104,57 @@ export function CrosstabView({ meta, onChanged }: Props) {
                     </span>
                   ))}
                 </th>
-                {result.columns.map((c) => (
-                  <th key={c.label} className="ct-colhead">
-                    {c.label}
-                  </th>
-                ))}
+                {visColIdx.map((ci) => {
+                  const c = result.columns[ci]
+                  const isGroup = colGroupLabels.has(c.label)
+                  const key = `col:${c.label}`
+                  const editing =
+                    headerEdit?.dim === 'col' && headerEdit.label === c.label
+                  return (
+                    <th
+                      key={c.label}
+                      className={`ct-colhead${dropTarget === key ? ' ct-drop' : ''}${
+                        selCols.has(c.label) ? ' ct-selected' : ''
+                      }`}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDragEnter={() => setDropTarget(key)}
+                      onDragLeave={() =>
+                        setDropTarget((t) => (t === key ? null : t))
+                      }
+                      onDrop={(e) => onDropHeader(e, 'col', c.label)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setMenu({ x: e.clientX, y: e.clientY, dim: 'col', label: c.label })
+                      }}
+                    >
+                      {editing ? (
+                        <input
+                          className="cell-input ct-head-input"
+                          autoFocus
+                          value={headerDraft}
+                          onChange={(e) => setHeaderDraft(e.target.value)}
+                          onBlur={commitHeaderEdit}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitHeaderEdit()
+                            else if (e.key === 'Escape') setHeaderEdit(null)
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className={isGroup ? 'ct-drag ct-group-head' : 'ct-drag'}
+                          draggable
+                          onDragStart={(e) => startDrag(e, 'col', c.label)}
+                          onClick={
+                            isGroup ? undefined : (e) => selectHeader('col', c.label, e)
+                          }
+                          onDoubleClick={() => startHeaderEdit('col', c.label)}
+                        >
+                          {dispCol(c.label)}
+                        </span>
+                      )}
+                    </th>
+                  )
+                })}
                 {activeSummaryCols.map((s) => (
                   <th key={s.key} className="ct-colhead ct-summary-head">
                     {s.label}
@@ -731,37 +1163,86 @@ export function CrosstabView({ meta, onChanged }: Props) {
               </tr>
             </thead>
             <tbody>
-              {result.row_labels.map((label, ri) => (
-                <tr key={label}>
-                  <th className="ct-rowhead">{label}</th>
-                  {result.cells[ri].map((cell, ci) => {
-                    const lines = cellLines(
-                      cell.count,
-                      result.columns[ci].base,
-                      margins.rowTotals[ri],
-                    )
-                    return (
-                      <td key={result.columns[ci].label} className="ct-cell">
-                        {lines.map((ln) => (
-                          <span key={ln.key} className="ct-stat-line">
-                            {ln.text}
-                          </span>
-                        ))}
+              {visRowIdx.map((ri) => {
+                const label = result.row_labels[ri]
+                const isGroup = rowGroupLabels.has(label)
+                const key = `row:${label}`
+                const editing =
+                  headerEdit?.dim === 'row' && headerEdit.label === label
+                return (
+                  <tr key={label}>
+                    <th
+                      className={`ct-rowhead${dropTarget === key ? ' ct-drop' : ''}${
+                        selRows.has(label) ? ' ct-selected' : ''
+                      }`}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDragEnter={() => setDropTarget(key)}
+                      onDragLeave={() => setDropTarget((t) => (t === key ? null : t))}
+                      onDrop={(e) => onDropHeader(e, 'row', label)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setMenu({ x: e.clientX, y: e.clientY, dim: 'row', label })
+                      }}
+                    >
+                      {editing ? (
+                        <input
+                          className="cell-input ct-head-input"
+                          autoFocus
+                          value={headerDraft}
+                          onChange={(e) => setHeaderDraft(e.target.value)}
+                          onBlur={commitHeaderEdit}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitHeaderEdit()
+                            else if (e.key === 'Escape') setHeaderEdit(null)
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className={isGroup ? 'ct-drag ct-group-head' : 'ct-drag'}
+                          draggable
+                          onDragStart={(e) => startDrag(e, 'row', label)}
+                          onClick={
+                            isGroup ? undefined : (e) => selectHeader('row', label, e)
+                          }
+                          onDoubleClick={() => startHeaderEdit('row', label)}
+                        >
+                          {dispRow(label)}
+                        </span>
+                      )}
+                    </th>
+                    {visColIdx.map((ci) => {
+                      const cell = result.cells[ri][ci]
+                      const lines = cellLines(
+                        cell.count,
+                        result.columns[ci].base,
+                        margins.rowTotals[ri],
+                      )
+                      return (
+                        <td key={result.columns[ci].label} className="ct-cell">
+                          {lines.map((ln) => (
+                            <span key={ln.key} className="ct-stat-line">
+                              {ln.text}
+                            </span>
+                          ))}
+                        </td>
+                      )
+                    })}
+                    {activeSummaryCols.map((s) => (
+                      <td key={s.key} className="ct-cell ct-summary">
+                        {s.key === 'row_n' ? margins.rowTotals[ri] : ''}
                       </td>
-                    )
-                  })}
-                  {activeSummaryCols.map((s) => (
-                    <td key={s.key} className="ct-cell ct-summary">
-                      {s.key === 'row_n' ? margins.rowTotals[ri] : ''}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+                    ))}
+                  </tr>
+                )
+              })}
               {activeSummaryRows.map((s) => (
                 <tr key={s.key} className="ct-summary-row">
                   <th className="ct-rowhead ct-summary">{s.label}</th>
-                  {result.columns.map((c, ci) => (
-                    <td key={c.label} className="ct-cell ct-summary">
+                  {visColIdx.map((ci) => (
+                    <td
+                      key={result.columns[ci].label}
+                      className="ct-cell ct-summary"
+                    >
                       {summaryRowValue(s.key, ci)}
                     </td>
                   ))}
@@ -774,12 +1255,139 @@ export function CrosstabView({ meta, onChanged }: Props) {
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+
+          {(rowGroups.length > 0 || columnGroups.length > 0) && (
+            <div className="ct-groups-panel">
+              {rowGroups.length > 0 && (
+                <div className="ct-group-col">
+                  <strong>Row groups</strong>
+                  {rowGroups.map((g) => (
+                    <div key={g.id} className="ct-group-item">
+                      <span className="badge">{g.mode}</span>
+                      <input
+                        className="cell-input"
+                        value={g.label}
+                        onChange={(e) => renameRowGroup(g.id, e.target.value)}
+                      />
+                      <span className="muted ct-group-members">
+                        {g.members.join(', ')}
+                      </span>
+                      <button onClick={() => removeRowGroup(g.id)} title="Remove">
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {columnGroups.length > 0 && (
+                <div className="ct-group-col">
+                  <strong>Column groups</strong>
+                  {columnGroups.map((g) => (
+                    <div key={g.id} className="ct-group-item">
+                      <span className="badge">{g.mode}</span>
+                      <input
+                        className="cell-input"
+                        value={g.label}
+                        onChange={(e) => renameColGroup(g.id, e.target.value)}
+                      />
+                      <span className="muted ct-group-members">
+                        {g.members.join(', ')}
+                      </span>
+                      <button onClick={() => removeColGroup(g.id)} title="Remove">
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {(hiddenRowList.length > 0 || hiddenColList.length > 0) && (
+            <div className="ct-hidden-panel">
+              {hiddenRowList.length > 0 && (
+                <div className="ct-hidden-line">
+                  <strong>Hidden rows:</strong>
+                  {hiddenRowList.map((l) => (
+                    <button
+                      key={l}
+                      className="ct-chip"
+                      onClick={() => unhide('row', l)}
+                      title="Show"
+                    >
+                      {dispRow(l)} ✕
+                    </button>
+                  ))}
+                </div>
+              )}
+              {hiddenColList.length > 0 && (
+                <div className="ct-hidden-line">
+                  <strong>Hidden columns:</strong>
+                  {hiddenColList.map((l) => (
+                    <button
+                      key={l}
+                      className="ct-chip"
+                      onClick={() => unhide('col', l)}
+                      title="Show"
+                    >
+                      {dispCol(l)} ✕
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {!result && !error && !loading && (
         <p className="muted">Choose a row and a column variable to build a table.</p>
       )}
+      {menu &&
+        (() => {
+          const isGroup = (menu.dim === 'row' ? rowGroupLabels : colGroupLabels).has(
+            menu.label,
+          )
+          const mode = (menu.dim === 'row' ? rowGroups : columnGroups).find(
+            (g) => g.label === menu.label,
+          )?.mode
+          return (
+            <>
+              <div className="ct-menu-backdrop" onClick={() => setMenu(null)} />
+              <div className="ct-menu" style={{ left: menu.x, top: menu.y }}>
+                <button
+                  onClick={() => {
+                    hideItem(menu.dim, menu.label)
+                    setMenu(null)
+                  }}
+                >
+                  Hide
+                </button>
+                {isGroup && (
+                  <>
+                    <button
+                      onClick={() => {
+                        toggleGroupMode(menu.dim, menu.label)
+                        setMenu(null)
+                      }}
+                    >
+                      {mode === 'net' ? 'Show as merge' : 'Show as NET'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        ungroup(menu.dim, menu.label)
+                        setMenu(null)
+                      }}
+                    >
+                      Ungroup
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )
+        })()}
       </div>
     </div>
   )
