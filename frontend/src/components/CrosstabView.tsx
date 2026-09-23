@@ -370,6 +370,39 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setTitleDraft('')
   }
 
+  // Reset the builder to a blank new crosstab (keeps the active folder target).
+  function newCrosstab() {
+    setSelectedId(null)
+    setTitleDraft('')
+    setRowValue('')
+    setColValue('')
+    setBannerSegments([])
+    setBannerGroups([])
+    setFilterId('')
+    setWeightId('')
+    setCellStats(new Set<CellStat>(['count', 'col_pct']))
+    setSummaryRows(new Set<SummaryRowStat>(['base_n']))
+    setSummaryCols(new Set<SummaryColStat>())
+    setSig(new Set<SigStat>())
+    setRowGroups([])
+    setColumnGroups([])
+    setRowRenames({})
+    setColRenames({})
+    setRowHidden(new Set())
+    setColHidden(new Set())
+    setCatHidden(new Set())
+    setCatRenames({})
+    setParentHidden(new Set())
+    setParentRenames({})
+    setSelCats(new Set())
+    setSelRows(new Set())
+    setSelCols(new Set())
+    setSelCells(new Set())
+    setAnchorRow(null)
+    setAnchorCol(null)
+    setHeaderEdit(null)
+  }
+
   function newFolder() {
     const node: CrosstabNode = {
       id: crypto.randomUUID(),
@@ -402,8 +435,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
       version: 1,
     }
     persistTree(insertNode(tree, activeFolderId, node))
-    setSelectedId(node.id)
-    setTitleDraft(name)
+    // Move on to a fresh crosstab; the saved one now lives in the tree.
+    newCrosstab()
   }
 
   function saveTable() {
@@ -1387,6 +1420,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
         <div className="ct-tree-head">
           <strong>Tables</strong>
           <span className="spacer" />
+          <button onClick={newCrosstab} title="Start a new blank crosstab">
+            + Table
+          </button>
           <button onClick={newFolder} title="New folder">
             + Folder
           </button>
