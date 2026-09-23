@@ -184,6 +184,7 @@ export interface CrosstabColumn {
   letter?: string | null
   top_label?: string
   group?: string
+  seg?: number
 }
 
 export interface CrosstabResponse {
@@ -215,10 +216,19 @@ export interface BannerSegment {
   variables: string[]
 }
 
+export interface BannerColumnGroup {
+  id: string
+  seg: number
+  label: string
+  members: string[]
+  mode: 'net' | 'merge'
+}
+
 export interface SavedCrosstabSpec {
   row: CrosstabRowSpec
   column: string | null
   banner?: BannerSegment[]
+  banner_groups?: BannerColumnGroup[]
   filter_id: string | null
   weight: string | null
   display: CrosstabDisplay
@@ -228,6 +238,10 @@ export interface SavedCrosstabSpec {
   column_renames: Record<string, string>
   row_hidden: string[]
   column_hidden: string[]
+  banner_cat_renames?: Record<string, string>
+  banner_cat_hidden?: string[]
+  banner_parent_renames?: Record<string, string>
+  banner_parent_hidden?: string[]
 }
 
 export interface CrosstabNode {
@@ -335,6 +349,7 @@ export function runCrosstab(
     row: CrosstabRowSpec
     column: string | null
     banner?: BannerSegment[]
+    bannerGroups?: BannerColumnGroup[]
     filterId?: string | null
     weight?: string | null
     rowGroups?: CrosstabGroup[]
@@ -345,6 +360,7 @@ export function runCrosstab(
     row: req.row,
     column: req.column ?? null,
     banner: req.banner ?? [],
+    banner_groups: req.bannerGroups ?? [],
     filter_id: req.filterId ?? null,
     weight: req.weight ?? null,
     row_groups: req.rowGroups ?? [],

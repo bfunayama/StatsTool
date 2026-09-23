@@ -77,7 +77,7 @@ def compute_crosstab(
         df = df[mask]
 
     # Banner columns (side-by-side segments, optionally two levels deep).
-    banner, col_top, col_group = _build_banner(df, index, request)
+    banner, col_top, col_group, col_seg = _build_banner(df, index, request)
 
     # Rows as (label, respondent mask, numeric value|None) plus the "valid answer"
     # mask that sets every column's base (grouping never changes the base).
@@ -122,7 +122,7 @@ def compute_crosstab(
         weights = compute.compute_weights(df, index, weight_var)
 
     return _assemble(
-        df.index, banner, col_top, col_group, rows, row_valid, row_kind, weights
+        df.index, banner, col_top, col_group, col_seg, rows, row_valid, row_kind, weights
     )
 
 
@@ -132,8 +132,10 @@ _GROUP_SEP = "\u0001"
 
 def _build_banner(
     df: pd.DataFrame, index, request: CrosstabRequest
-) -> tuple[list[tuple[str, pd.Series, float | None]], list[str], list[str]]:
-    """Build banner columns plus per-column top label and significance group.
+) -> tuple[
+    list[tuple[str, pd.Series, float | None]], list[str], list[str], list[int]
+]:
+    """Build banner columns plus per-column top label, significance group, segment.
 
     ``request.banner`` (new) supports side-by-side segments and two-level nesting;
     otherwise fall back to the single ``column`` (with column NET/merge groups).
@@ -143,34 +145,47 @@ def _build_banner(
         banner: list[tuple[str, pd.Series, float | None]] = []
         top: list[str] = []
         group: list[str] = []
+        seg_of: list[int] = []
         for si, segment in enumerate(request.banner):
+            # NET/merge groups defined on this segment's leaf categories.
+            seg_groups = [
+                CrosstabGroup(id=g.id, label=g.label, members=g.members, mode=g.mode)
+                for g in request.banner_groups
+                if g.seg == si
+            ]
             variables = segment.variables
             if not variables:  # Total column
                 banner.append(("Total", pd.Series(True, index=idx), None))
                 top.append("Total")
                 group.append(f"{si}{_GROUP_SEP}__total__")
+                seg_of.append(si)
                 continue
             primary = index.get(variables[0])
             if primary is None:
                 raise CrosstabError(f"Unknown banner variable: {variables[0]}")
             s1 = compute.compute_display_series(df, index, primary)
             if len(variables) == 1:
-                for label in _ordered_categories(s1, primary):
-                    banner.append((label, s1 == label, None))
+                items = [(lbl, s1 == lbl, None) for lbl in _ordered_categories(s1, primary)]
+                for label, mask, _v in _apply_groups(items, seg_groups, idx):
+                    banner.append((label, mask, None))
                     top.append(primary.label)
                     group.append(f"{si}{_GROUP_SEP}__var__")
+                    seg_of.append(si)
                 continue
             nested = index.get(variables[1])
             if nested is None:
                 raise CrosstabError(f"Unknown banner variable: {variables[1]}")
             s2 = compute.compute_display_series(df, index, nested)
+            sub_labels = _ordered_categories(s2, nested)
             for c1 in _ordered_categories(s1, primary):
                 m1 = s1 == c1
-                for c2 in _ordered_categories(s2, nested):
-                    banner.append((c2, m1 & (s2 == c2), None))
+                items = [(c2, m1 & (s2 == c2), None) for c2 in sub_labels]
+                for label, mask, _v in _apply_groups(items, seg_groups, idx):
+                    banner.append((label, mask, None))
                     top.append(c1)
                     group.append(f"{si}{_GROUP_SEP}{c1}")
-        return banner, top, group
+                    seg_of.append(si)
+        return banner, top, group, seg_of
 
     # Legacy single-column path (Total or one variable), with column NET/merge.
     if not request.column:
@@ -186,7 +201,7 @@ def _build_banner(
         ]
     banner = _apply_groups(banner, request.column_groups, idx)
     # Flat header (no top row) and a single comparison group across all columns.
-    return banner, [""] * len(banner), ["__all__"] * len(banner)
+    return banner, [""] * len(banner), ["__all__"] * len(banner), [-1] * len(banner)
 
 
 
@@ -234,6 +249,7 @@ def _assemble(
     banner: list[tuple[str, pd.Series, float | None]],
     col_top: list[str],
     col_group: list[str],
+    col_seg: list[int],
     rows: list[tuple[str, pd.Series, float | None]],
     row_valid: pd.Series,
     row_kind: str,
@@ -270,6 +286,7 @@ def _assemble(
                 eff_base=eff,
                 top_label=col_top[ci],
                 group=col_group[ci],
+                seg=col_seg[ci],
             )
         )
         col_valids.append(col_valid)

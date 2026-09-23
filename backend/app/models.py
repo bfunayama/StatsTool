@@ -358,6 +358,20 @@ class BannerSegment(BaseModel):
     variables: list[str] = Field(default_factory=list)
 
 
+class BannerColumnGroup(BaseModel):
+    """A NET or merge of leaf categories within one banner segment.
+
+    ``seg`` is the segment index; ``members`` are leaf-category labels. For a
+    nested segment the group is applied within each parent category.
+    """
+
+    id: str
+    seg: int
+    label: str
+    members: list[str]
+    mode: Literal["net", "merge"]
+
+
 class CrosstabGroup(BaseModel):
     """A NET or merge of several row/column categories.
 
@@ -379,6 +393,7 @@ class CrosstabRequest(BaseModel):
     row: CrosstabRowSpec
     column: str | None = None  # None → a single "Total" banner (whole sample)
     banner: list[BannerSegment] = Field(default_factory=list)  # nested/side-by-side
+    banner_groups: list[BannerColumnGroup] = Field(default_factory=list)
     filter_id: str | None = None  # optional saved filter to restrict respondents
     weight: str | None = None  # optional weight-variable name
     row_groups: list[CrosstabGroup] = Field(default_factory=list)
@@ -404,6 +419,7 @@ class CrosstabColumn(BaseModel):
     letter: str | None = None  # column id (A, B, C…) for significance letters
     top_label: str = ""  # parent header (nested/side-by-side banners); "" = flat
     group: str = ""  # sub-group id: header span + significance comparison scope
+    seg: int = -1  # banner segment index (-1 = legacy single-column mode)
 
 
 class CrosstabResponse(BaseModel):
@@ -434,6 +450,7 @@ class SavedCrosstabSpec(BaseModel):
     row: CrosstabRowSpec
     column: str | None = None  # None → Total-sample table (no column)
     banner: list[BannerSegment] = Field(default_factory=list)  # nested/side-by-side
+    banner_groups: list[BannerColumnGroup] = Field(default_factory=list)
     filter_id: str | None = None
     weight: str | None = None
     display: CrosstabDisplay = Field(default_factory=CrosstabDisplay)
@@ -444,6 +461,11 @@ class SavedCrosstabSpec(BaseModel):
     column_renames: dict[str, str] = Field(default_factory=dict)
     row_hidden: list[str] = Field(default_factory=list)
     column_hidden: list[str] = Field(default_factory=list)
+    # Sub-column (advanced banner) display-only overrides.
+    banner_cat_renames: dict[str, str] = Field(default_factory=dict)
+    banner_cat_hidden: list[str] = Field(default_factory=list)
+    banner_parent_renames: dict[str, str] = Field(default_factory=dict)
+    banner_parent_hidden: list[str] = Field(default_factory=list)
 
 
 class CrosstabNode(BaseModel):

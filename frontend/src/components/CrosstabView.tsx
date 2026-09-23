@@ -8,7 +8,9 @@ import {
 import {
   runCrosstab,
   saveCrosstabs,
+  type BannerColumnGroup,
   type BannerSegment,
+  type CrosstabColumn,
   type CrosstabGroup,
   type CrosstabNode,
   type CrosstabResponse,
@@ -53,6 +55,8 @@ const NUMERIC_SUMMARY_ROW: Set<SummaryRowStat> = new Set(['total_sum', 'mean'])
 
 // Column value meaning "no crossing variable" — a single Total-sample banner.
 const TOTAL = '__total__'
+// Separator for sub-column keys: `${segmentIndex}\u0001${categoryLabel}`.
+const CATSEP = '\u0001'
 
 const Z_CRIT_95 = 1.959963985 // two-tailed critical value at 95% confidence
 
@@ -185,6 +189,25 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Advanced banner: side-by-side segments, each 1 variable or a 2-level nest.
   // Empty = simple mode (use the single Column dropdown, with column NET/hide).
   const [bannerSegments, setBannerSegments] = useState<BannerSegment[]>([])
+  // Sub-column operations (advanced banner mode only), keyed by segment+category.
+  const [bannerGroups, setBannerGroups] = useState<BannerColumnGroup[]>([])
+  const [selCats, setSelCats] = useState<Set<string>>(new Set())
+  const [catHidden, setCatHidden] = useState<Set<string>>(new Set())
+  const [catRenames, setCatRenames] = useState<Record<string, string>>({})
+  const [parentHidden, setParentHidden] = useState<Set<string>>(new Set())
+  const [parentRenames, setParentRenames] = useState<Record<string, string>>({})
+  const [advMenu, setAdvMenu] = useState<{
+    x: number
+    y: number
+    kind: 'leaf' | 'parent'
+    seg: number
+    label: string
+    group: string
+  } | null>(null)
+  const [advEdit, setAdvEdit] = useState<{ kind: 'leaf' | 'parent'; key: string } | null>(
+    null,
+  )
+  const [advDraft, setAdvDraft] = useState('')
   const [filterId, setFilterId] = useState('')
   const [weightId, setWeightId] = useState('')
   const [result, setResult] = useState<CrosstabResponse | null>(null)
@@ -241,6 +264,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Advanced banner active → send segments and disable per-column NET/hide/rename.
   const advancedBanner = bannerSegments.length > 0
   const bannerKey = JSON.stringify(bannerSegments)
+  const bannerGroupsKey = JSON.stringify(bannerGroups)
   const hasColumn = advancedBanner || !!colValue
 
   useEffect(() => {
@@ -282,10 +306,15 @@ export function CrosstabView({ meta, onChanged }: Props) {
       },
       row_groups: rowGroups,
       column_groups: columnGroups,
+      banner_groups: bannerGroups,
       row_renames: rowRenames,
       column_renames: colRenames,
       row_hidden: [...rowHidden],
       column_hidden: [...colHidden],
+      banner_cat_renames: catRenames,
+      banner_cat_hidden: [...catHidden],
+      banner_parent_renames: parentRenames,
+      banner_parent_hidden: [...parentHidden],
     }
   }
 
@@ -293,6 +322,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setRowValue(encodeRow(spec.row))
     setColValue(spec.column ?? TOTAL)
     setBannerSegments(spec.banner ?? [])
+    setBannerGroups(spec.banner_groups ?? [])
     setFilterId(spec.filter_id ?? '')
     setWeightId(spec.weight ?? '')
     setCellStats(new Set(spec.display.cell_stats as CellStat[]))
@@ -305,6 +335,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setColRenames(spec.column_renames ?? {})
     setRowHidden(new Set(spec.row_hidden ?? []))
     setColHidden(new Set(spec.column_hidden ?? []))
+    setCatRenames(spec.banner_cat_renames ?? {})
+    setCatHidden(new Set(spec.banner_cat_hidden ?? []))
+    setParentRenames(spec.banner_parent_renames ?? {})
+    setParentHidden(new Set(spec.banner_parent_hidden ?? []))
+    setSelCats(new Set())
     setSelRows(new Set())
     setSelCols(new Set())
     setAnchorRow(null)
@@ -423,6 +458,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
       row,
       column: advancedBanner ? null : colValue === TOTAL ? null : colValue,
       banner: advancedBanner ? bannerSegments : [],
+      bannerGroups: advancedBanner ? bannerGroups : [],
       filterId: filterId || null,
       weight: weightId || null,
       rowGroups,
@@ -443,7 +479,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return () => {
       ignore = true
     }
-  }, [meta.id, rowValue, colValue, bannerKey, filterId, weightId, rowGroups, columnGroups])
+  }, [meta.id, rowValue, colValue, bannerKey, bannerGroupsKey, filterId, weightId, rowGroups, columnGroups])
 
   // A new/rebuilt table invalidates any cell selection (indices shift).
   useEffect(() => {
@@ -711,7 +747,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const visColIdx = result
     ? result.columns
         .map((_c, i) => i)
-        .filter((i) => !colHidden.has(result.columns[i].label))
+        .filter((i) => {
+          const c = result.columns[i]
+          if (advancedBanner)
+            return !catHidden.has(catKey(c)) && !parentHidden.has(c.group ?? '')
+          return !colHidden.has(c.label)
+        })
     : []
   const visRowIdx = result
     ? result.row_labels
@@ -724,18 +765,29 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const hiddenColList = result
     ? result.columns.map((c) => c.label).filter((l) => colHidden.has(l))
     : []
+  // Hidden sub-columns / parents (advanced banner mode).
+  const hiddenCatList = [...catHidden].map((k) => ({
+    key: k,
+    label: k.split(CATSEP).slice(1).join(CATSEP),
+  }))
+  const hiddenParentList = result
+    ? [...parentHidden].map((g) => ({
+        group: g,
+        label: result.columns.find((c) => (c.group ?? '') === g)?.top_label ?? g,
+      }))
+    : []
 
   // Two-level banner → render a spanning top header row. Top spans group
   // contiguous visible columns that share a banner sub-group.
   const twoLevel = !!result && result.columns.some((c) => c.top_label)
-  const topSpans: { key: string; label: string; count: number }[] = []
+  const topSpans: { key: string; label: string; count: number; group: string }[] = []
   if (result && twoLevel) {
     for (const ci of visColIdx) {
       const c = result.columns[ci]
       const gid = c.group ?? ''
       const last = topSpans[topSpans.length - 1]
       if (last && last.key === gid) last.count += 1
-      else topSpans.push({ key: gid, label: c.top_label ?? '', count: 1 })
+      else topSpans.push({ key: gid, label: dispTop(c), count: 1, group: gid })
     }
   }
 
@@ -832,6 +884,112 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   function removeSegment(si: number) {
     setBannerSegments((prev) => prev.filter((_, i) => i !== si))
+  }
+
+  // --- Sub-column (advanced banner) helpers, keyed by segment + category ---
+  function catKey(c: CrosstabColumn) {
+    return `${c.seg ?? -1}${CATSEP}${c.label}`
+  }
+  function dispLeaf(c: CrosstabColumn) {
+    return catRenames[catKey(c)] ?? c.label
+  }
+  function dispTop(c: CrosstabColumn) {
+    return parentRenames[c.group ?? ''] ?? c.top_label ?? ''
+  }
+  function bannerGroupOf(c: CrosstabColumn) {
+    return bannerGroups.find((g) => g.seg === (c.seg ?? -1) && g.label === c.label)
+  }
+
+  function toggleCat(key: string, additive: boolean) {
+    setSelCats((prev) => {
+      const next = additive ? new Set(prev) : new Set<string>()
+      if (prev.has(key) && additive) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function uniqueBannerLabel(base: string, seg: number): string {
+    const labels = new Set(
+      bannerGroups.filter((g) => g.seg === seg).map((g) => g.label),
+    )
+    if (!labels.has(base)) return base
+    let n = 2
+    while (labels.has(`${base} ${n}`)) n += 1
+    return `${base} ${n}`
+  }
+
+  // Merge or NET the selected leaf categories (must all be in one segment).
+  function makeBannerGroup(mode: 'net' | 'merge') {
+    const keys = [...selCats]
+    if (keys.length < 2) return
+    const segs = new Set(keys.map((k) => Number(k.split(CATSEP)[0])))
+    if (segs.size !== 1) return
+    const seg = [...segs][0]
+    const members = keys.map((k) => k.split(CATSEP).slice(1).join(CATSEP))
+    const label = uniqueBannerLabel(
+      mode === 'net' ? 'NET' : members.join(' / '),
+      seg,
+    )
+    setBannerGroups([
+      ...bannerGroups,
+      { id: crypto.randomUUID(), seg, label, members, mode },
+    ])
+    setSelCats(new Set())
+  }
+
+  function ungroupBanner(seg: number, label: string) {
+    setBannerGroups((prev) =>
+      prev.filter((g) => !(g.seg === seg && g.label === label)),
+    )
+  }
+
+  function toggleBannerMode(seg: number, label: string) {
+    setBannerGroups((prev) =>
+      prev.map((g) => {
+        if (g.seg !== seg || g.label !== label) return g
+        const mode = g.mode === 'net' ? 'merge' : 'net'
+        return { ...g, mode, label: mode === 'net' ? 'NET' : g.members.join(' / ') }
+      }),
+    )
+  }
+
+  function hideCat(key: string) {
+    setCatHidden((prev) => new Set(prev).add(key))
+  }
+  function hideParent(group: string) {
+    setParentHidden((prev) => new Set(prev).add(group))
+  }
+  function unhideCat(key: string) {
+    setCatHidden((prev) => {
+      const next = new Set(prev)
+      next.delete(key)
+      return next
+    })
+  }
+  function unhideParent(group: string) {
+    setParentHidden((prev) => {
+      const next = new Set(prev)
+      next.delete(group)
+      return next
+    })
+  }
+
+  function startAdvEdit(kind: 'leaf' | 'parent', key: string, current: string) {
+    setAdvEdit({ kind, key })
+    setAdvDraft(current)
+  }
+  function commitAdvEdit() {
+    if (!advEdit) return
+    const draft = advDraft.trim()
+    const setter = advEdit.kind === 'leaf' ? setCatRenames : setParentRenames
+    setter((prev) => {
+      const next = { ...prev }
+      if (!draft) delete next[advEdit.key]
+      else next[advEdit.key] = draft
+      return next
+    })
+    setAdvEdit(null)
   }
 
   function uniqueGroupLabel(base: string, existing: CrosstabGroup[]): string {
@@ -1321,7 +1479,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <span className="muted"> (side-by-side / nested columns)</span>
         </span>
         {bannerSegments.length === 0 ? (
-          <button onClick={() => setBannerSegments([{ variables: [] }])}>
+          <button
+            onClick={() => {
+              changeColumn('')
+              setBannerSegments([{ variables: [] }])
+            }}
+          >
             + Build banner
           </button>
         ) : (
@@ -1370,7 +1533,18 @@ export function CrosstabView({ meta, onChanged }: Props) {
             >
               + Add column
             </button>
-            <button className="ct-banner-clear" onClick={() => setBannerSegments([])}>
+            <button
+              className="ct-banner-clear"
+              onClick={() => {
+                setBannerSegments([])
+                setBannerGroups([])
+                setSelCats(new Set())
+                setCatHidden(new Set())
+                setCatRenames({})
+                setParentHidden(new Set())
+                setParentRenames({})
+              }}
+            >
               Use single column
             </button>
           </>
@@ -1499,6 +1673,29 @@ export function CrosstabView({ meta, onChanged }: Props) {
             </div>
           )}
 
+          {advancedBanner && selCats.size > 0 && (
+            <div className="ct-select-bar">
+              <span className="ct-select-group">
+                <span className="muted">
+                  {selCats.size} sub-column{selCats.size === 1 ? '' : 's'} selected
+                </span>
+                <button
+                  disabled={selCats.size < 2}
+                  onClick={() => makeBannerGroup('merge')}
+                >
+                  Merge
+                </button>
+                <button
+                  disabled={selCats.size < 2}
+                  onClick={() => makeBannerGroup('net')}
+                >
+                  NET
+                </button>
+                <button onClick={() => setSelCats(new Set())}>Clear</button>
+              </span>
+            </div>
+          )}
+
           <div className="table-scroll">
           <table className="grid crosstab">
             <thead>
@@ -1512,15 +1709,50 @@ export function CrosstabView({ meta, onChanged }: Props) {
                         </span>
                       ))}
                     </th>
-                    {topSpans.map((span) => (
-                      <th
-                        key={span.key}
-                        className="ct-colhead ct-top-head"
-                        colSpan={span.count}
-                      >
-                        {span.label}
-                      </th>
-                    ))}
+                    {topSpans.map((span) => {
+                      const editing =
+                        advEdit?.kind === 'parent' && advEdit.key === span.group
+                      return (
+                        <th
+                          key={span.key}
+                          className="ct-colhead ct-top-head"
+                          colSpan={span.count}
+                          onContextMenu={(e) => {
+                            e.preventDefault()
+                            setAdvMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              kind: 'parent',
+                              seg: -1,
+                              label: span.label,
+                              group: span.group,
+                            })
+                          }}
+                        >
+                          {editing ? (
+                            <input
+                              className="cell-input ct-head-input"
+                              autoFocus
+                              value={advDraft}
+                              onChange={(e) => setAdvDraft(e.target.value)}
+                              onBlur={commitAdvEdit}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') commitAdvEdit()
+                                else if (e.key === 'Escape') setAdvEdit(null)
+                              }}
+                            />
+                          ) : (
+                            <span
+                              onDoubleClick={() =>
+                                startAdvEdit('parent', span.group, span.label)
+                              }
+                            >
+                              {span.label}
+                            </span>
+                          )}
+                        </th>
+                      )
+                    })}
                     {activeSummaryCols.map((s) => (
                       <th
                         key={s.key}
@@ -1534,11 +1766,56 @@ export function CrosstabView({ meta, onChanged }: Props) {
                   <tr>
                     {visColIdx.map((ci) => {
                       const c = result.columns[ci]
+                      const key = catKey(c)
+                      const grp = bannerGroupOf(c)
+                      const editing =
+                        advEdit?.kind === 'leaf' && advEdit.key === key
                       return (
-                        <th key={ci} className="ct-colhead">
-                          {c.label}
-                          {sigOn && lettersOn && c.letter && (
-                            <span className="ct-col-letter">{c.letter}</span>
+                        <th
+                          key={ci}
+                          className={`ct-colhead${
+                            selCats.has(key) ? ' ct-selected' : ''
+                          }`}
+                          onContextMenu={(e) => {
+                            e.preventDefault()
+                            setAdvMenu({
+                              x: e.clientX,
+                              y: e.clientY,
+                              kind: 'leaf',
+                              seg: c.seg ?? -1,
+                              label: c.label,
+                              group: c.group ?? '',
+                            })
+                          }}
+                        >
+                          {editing ? (
+                            <input
+                              className="cell-input ct-head-input"
+                              autoFocus
+                              value={advDraft}
+                              onChange={(e) => setAdvDraft(e.target.value)}
+                              onBlur={commitAdvEdit}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') commitAdvEdit()
+                                else if (e.key === 'Escape') setAdvEdit(null)
+                              }}
+                            />
+                          ) : (
+                            <span
+                              className={grp ? 'ct-group-head' : undefined}
+                              onClick={(e) => {
+                                if (e.metaKey || e.ctrlKey || e.shiftKey)
+                                  toggleCat(key, true)
+                              }}
+                              onDoubleClick={() =>
+                                startAdvEdit('leaf', key, dispLeaf(c))
+                              }
+                            >
+                              {dispLeaf(c)}
+                              {sigOn && lettersOn && c.letter && (
+                                <span className="ct-col-letter">{c.letter}</span>
+                              )}
+                            </span>
                           )}
                         </th>
                       )
@@ -1888,6 +2165,41 @@ export function CrosstabView({ meta, onChanged }: Props) {
               )}
             </div>
           )}
+
+          {(hiddenCatList.length > 0 || hiddenParentList.length > 0) && (
+            <div className="ct-hidden-panel">
+              {hiddenParentList.length > 0 && (
+                <div className="ct-hidden-line">
+                  <strong>Hidden banner groups:</strong>
+                  {hiddenParentList.map((p) => (
+                    <button
+                      key={p.group}
+                      className="ct-chip"
+                      onClick={() => unhideParent(p.group)}
+                      title="Show"
+                    >
+                      {p.label} ✕
+                    </button>
+                  ))}
+                </div>
+              )}
+              {hiddenCatList.length > 0 && (
+                <div className="ct-hidden-line">
+                  <strong>Hidden sub-columns:</strong>
+                  {hiddenCatList.map((c) => (
+                    <button
+                      key={c.key}
+                      className="ct-chip"
+                      onClick={() => unhideCat(c.key)}
+                      title="Show"
+                    >
+                      {c.label} ✕
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -1928,6 +2240,52 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       onClick={() => {
                         ungroup(menu.dim, menu.label)
                         setMenu(null)
+                      }}
+                    >
+                      Ungroup
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )
+        })()}
+      {advMenu &&
+        (() => {
+          const grp =
+            advMenu.kind === 'leaf'
+              ? bannerGroups.find(
+                  (g) => g.seg === advMenu.seg && g.label === advMenu.label,
+                )
+              : undefined
+          return (
+            <>
+              <div className="ct-menu-backdrop" onClick={() => setAdvMenu(null)} />
+              <div className="ct-menu" style={{ left: advMenu.x, top: advMenu.y }}>
+                <button
+                  onClick={() => {
+                    if (advMenu.kind === 'leaf')
+                      hideCat(`${advMenu.seg}${CATSEP}${advMenu.label}`)
+                    else hideParent(advMenu.group)
+                    setAdvMenu(null)
+                  }}
+                >
+                  {advMenu.kind === 'parent' ? 'Hide group' : 'Hide'}
+                </button>
+                {grp && (
+                  <>
+                    <button
+                      onClick={() => {
+                        toggleBannerMode(advMenu.seg, advMenu.label)
+                        setAdvMenu(null)
+                      }}
+                    >
+                      {grp.mode === 'net' ? 'Show as merge' : 'Show as NET'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        ungroupBanner(advMenu.seg, advMenu.label)
+                        setAdvMenu(null)
                       }}
                     >
                       Ungroup
