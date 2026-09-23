@@ -356,6 +356,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Multi-select of saved tables for export, plus export progress/error.
   const [exportSel, setExportSel] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
+  const [exportChoice, setExportChoice] = useState<'all' | 'selected' | null>(
+    null,
+  )
   const [titleDraft, setTitleDraft] = useState('')
   const [sidebarWidth, setSidebarWidth] = useState(
     () => Number(localStorage.getItem('statstool.ctSidebar')) || 240,
@@ -618,15 +621,20 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return out
   }
 
-  async function doExport(tables: { name: string; spec: SavedCrosstabSpec }[]) {
-    if (tables.length === 0) {
+  async function doExport(
+    sheets: {
+      name: string
+      tables: { name: string; spec: SavedCrosstabSpec }[]
+    }[],
+  ) {
+    if (!sheets.some((s) => s.tables.length > 0)) {
       setTreeError('No tables to export.')
       return
     }
     setExporting(true)
     setTreeError(null)
     try {
-      await exportXlsx(meta.id, tables)
+      await exportXlsx(meta.id, sheets)
     } catch (err) {
       setTreeError(err instanceof Error ? err.message : 'Export failed')
     } finally {
@@ -634,18 +642,52 @@ export function CrosstabView({ meta, onChanged }: Props) {
     }
   }
 
-  function exportAll() {
+  // Group tables into one sheet per folder (plus "Top level"), tree order.
+  function sheetsByFolder(include: (id: string) => boolean) {
+    const groups = new Map<
+      string,
+      { name: string; spec: SavedCrosstabSpec }[]
+    >()
+    const walk = (nodes: CrosstabNode[], folder: string) => {
+      for (const n of nodes) {
+        if (n.kind === 'folder') walk(n.children, n.name)
+        else if (n.spec && include(n.id)) {
+          const arr = groups.get(folder) ?? []
+          arr.push({ name: n.name, spec: n.spec })
+          groups.set(folder, arr)
+        }
+      }
+    }
+    walk(tree, 'Top level')
+    return [...groups.entries()].map(([name, tables]) => ({ name, tables }))
+  }
+
+  // Turn the chosen scope + layout into the sheet grouping the backend expects.
+  function runExport(layout: 'sheets' | 'single' | 'folders') {
+    const scope = exportChoice
+    setExportChoice(null)
+    if (!scope) return
+    const include = (id: string) => scope === 'all' || exportSel.has(id)
+    if (layout === 'folders') {
+      doExport(sheetsByFolder(include))
+      return
+    }
+    const tables = collectCrosstabNodes(tree)
+      .filter((n) => include(n.id))
+      .map((n) => ({ name: n.name, spec: n.spec! }))
     doExport(
-      collectCrosstabNodes(tree).map((n) => ({ name: n.name, spec: n.spec! })),
+      layout === 'single'
+        ? [{ name: 'Tables', tables }]
+        : tables.map((t) => ({ name: t.name, tables: [t] })),
     )
   }
 
+  function exportAll() {
+    setExportChoice('all')
+  }
+
   function exportSelected() {
-    doExport(
-      collectCrosstabNodes(tree)
-        .filter((n) => exportSel.has(n.id))
-        .map((n) => ({ name: n.name, spec: n.spec! })),
-    )
+    setExportChoice('selected')
   }
 
   function exportCurrent() {
@@ -653,7 +695,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     if (!spec) return
     const name =
       titleDraft.trim() || (rowValue ? rowLabelFor(rowValue) : 'Table')
-    doExport([{ name, spec }])
+    doExport([{ name, tables: [{ name, spec }] }])
   }
 
   function copySelected() {
@@ -3094,6 +3136,46 @@ export function CrosstabView({ meta, onChanged }: Props) {
               <button className="danger" onClick={confirmDeleteNode}>
                 Delete
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {exportChoice && (
+        <div className="modal-backdrop" onClick={() => setExportChoice(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>
+                Export {exportChoice === 'all' ? 'all tables' : 'selected tables'}
+              </h3>
+              <button
+                className="expand"
+                onClick={() => setExportChoice(null)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="muted">Choose how to lay out the workbook:</p>
+            <div className="ct-export-options">
+              <button onClick={() => runExport('single')}>
+                <strong>One worksheet</strong>
+                <span className="muted">
+                  All tables on a single tab, separated by blank rows
+                </span>
+              </button>
+              <button onClick={() => runExport('folders')}>
+                <strong>One worksheet per folder</strong>
+                <span className="muted">
+                  A tab per folder (and “Top level”), tables stacked on each
+                </span>
+              </button>
+              <button onClick={() => runExport('sheets')}>
+                <strong>Multiple worksheets</strong>
+                <span className="muted">One table per tab</span>
+              </button>
+            </div>
+            <div className="modal-actions">
+              <button onClick={() => setExportChoice(null)}>Cancel</button>
             </div>
           </div>
         </div>

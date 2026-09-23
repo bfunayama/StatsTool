@@ -17,7 +17,7 @@ from .models import (
     CrosstabRequest,
     CrosstabResponse,
     DatasetMeta,
-    ExportTable,
+    ExportSheet,
     SavedCrosstabSpec,
 )
 
@@ -75,20 +75,35 @@ def _request_from_spec(spec: SavedCrosstabSpec) -> CrosstabRequest:
 
 
 def build_workbook(
-    meta: DatasetMeta, df: pd.DataFrame, tables: list[ExportTable]
+    meta: DatasetMeta, df: pd.DataFrame, sheets: list[ExportSheet]
 ) -> bytes:
     from openpyxl import Workbook
 
     wb = Workbook()
     wb.remove(wb.active)
     used: set[str] = set()
-    for i, table in enumerate(tables):
-        ws = wb.create_sheet(title=_safe_sheet_name(table.name or f"Table {i + 1}", used))
-        try:
-            result = crosstabbing.compute_crosstab(df, meta, _request_from_spec(table.spec))
-            _render_sheet(ws, meta, table.spec, result)
-        except crosstabbing.CrosstabError as err:
-            ws["A1"] = f"Could not build this table: {err}"
+    for i, sheet in enumerate(sheets):
+        if not sheet.tables:
+            continue
+        ws = wb.create_sheet(
+            title=_safe_sheet_name(sheet.name or f"Sheet {i + 1}", used)
+        )
+        titled = len(sheet.tables) > 1
+        r = 1
+        for table in sheet.tables:
+            if titled:
+                cell = ws.cell(r, 1, table.name)
+                cell.font = _bold()
+                r += 1
+            try:
+                result = crosstabbing.compute_crosstab(
+                    df, meta, _request_from_spec(table.spec)
+                )
+                r = _render_table(ws, meta, table.spec, result, r)
+            except crosstabbing.CrosstabError as err:
+                ws.cell(r, 1, f"Could not build this table: {err}")
+                r += 1
+            r += 3  # three blank rows between stacked tables
     if not wb.sheetnames:
         wb.create_sheet(title="Empty")
     buffer = io.BytesIO()
@@ -96,9 +111,20 @@ def build_workbook(
     return buffer.getvalue()
 
 
-def _render_sheet(
-    ws, meta: DatasetMeta, spec: SavedCrosstabSpec, result: CrosstabResponse
-) -> None:
+def _bold():
+    from openpyxl.styles import Font
+
+    return Font(bold=True)
+
+
+def _render_table(
+    ws,
+    meta: DatasetMeta,
+    spec: SavedCrosstabSpec,
+    result: CrosstabResponse,
+    start_row: int,
+) -> int:
+    """Write one table starting at ``start_row``; return the next free row."""
     advanced = bool(spec.banner)
     display = spec.display
     cell_stats = [(k, lbl) for k, lbl in CELL_STATS if k in display.cell_stats]
@@ -255,10 +281,19 @@ def _render_sheet(
     if cell_stats:
         keys = [k for k, _ in cell_stats]
         attach_stat = "col_pct" if "col_pct" in keys else keys[0]
+    multi_stat = len(cell_stats) > 1
 
-    first_col = 3  # A=row label, B=statistic, data from column C
-    r = 1
+    def stat_text(ri: int, ci: int, key: str) -> str:
+        v = stat_value(ri, ci, key)
+        if v is None:
+            return ""
+        return f"{round(v)}" if key == "count" else f"{v:.1f}%"
 
+    first_col = 2  # A = row labels (and the cell-stat legend), data from column B
+    r = start_row
+    header_row = r + 1 if two_level else r
+
+    # Two-level banner: parent labels span above their leaf columns.
     if two_level:
         prev_group = object()
         pos = first_col
@@ -270,6 +305,10 @@ def _render_sheet(
             pos += 1
         r += 1
 
+    # Cell-stat legend in the top-left corner (column A), like the UI.
+    if cell_stats:
+        corner = ws.cell(header_row, 1, "\n".join(lbl for _k, lbl in cell_stats))
+        corner.alignment = _wrap()
     pos = first_col
     for ci in vis_cols:
         c = result.columns[ci]
@@ -285,42 +324,48 @@ def _render_sheet(
 
     summary_start = first_col + len(vis_cols)
     for ri in vis_rows:
-        for si, (key, label) in enumerate(cell_stats):
-            ws.cell(r, 1, disp_row(result.row_labels[ri]))
-            ws.cell(r, 2, label)
-            pos = first_col
-            for ci in vis_cols:
+        ws.cell(r, 1, disp_row(result.row_labels[ri]))
+        pos = first_col
+        for ci in vis_cols:
+            cell = ws.cell(r, pos)
+            if multi_stat:
+                # Stack the statistics within the cell, matching the UI.
+                lines = []
+                for key, _lbl in cell_stats:
+                    s = stat_text(ri, ci, key)
+                    if sig_on and key == attach_stat:
+                        m = marks(ri, ci)
+                        if m:
+                            s = f"{s} {m}".strip()
+                    lines.append(s)
+                cell.value = "\n".join(lines)
+                cell.alignment = _wrap()
+            elif cell_stats:
+                key = cell_stats[0][0]
                 value = stat_value(ri, ci, key)
-                cell = ws.cell(r, pos)
-                mark = marks(ri, ci) if sig_on and key == attach_stat else ""
+                mark = marks(ri, ci) if sig_on else ""
                 if value is None:
                     cell.value = mark or ""
                 elif key == "count":
-                    if mark:
-                        cell.value = f"{round(value)} {mark}"
-                    else:
-                        cell.value = round(value)
+                    cell.value = f"{round(value)} {mark}" if mark else round(value)
+                elif mark:
+                    cell.value = f"{value:.1f}% {mark}"
                 else:
-                    if mark:
-                        cell.value = f"{value:.1f}% {mark}"
-                    else:
-                        cell.value = round(value, 1)
-                        cell.number_format = '0.0"%"'
-                pos += 1
-            # Summary columns carry one value per row: show on the first stat row.
-            if si == 0:
-                spos = summary_start
-                for sk, _lbl in summary_cols:
-                    val = summary_col_value(sk, ri)
-                    scell = ws.cell(r, spos)
-                    if val is None:
-                        scell.value = ""
-                    elif sk in NUMERIC_SUMMARY_COL:
-                        scell.value = round(val, 2)
-                    else:
-                        scell.value = round(val)
-                    spos += 1
-            r += 1
+                    cell.value = round(value, 1)
+                    cell.number_format = '0.0"%"'
+            pos += 1
+        spos = summary_start
+        for sk, _lbl in summary_cols:
+            val = summary_col_value(sk, ri)
+            scell = ws.cell(r, spos)
+            if val is None:
+                scell.value = ""
+            elif sk in NUMERIC_SUMMARY_COL:
+                scell.value = round(val, 2)
+            else:
+                scell.value = round(val)
+            spos += 1
+        r += 1
 
     for key, label in summary_rows:
         ws.cell(r, 1, label)
@@ -337,18 +382,24 @@ def _render_sheet(
             pos += 1
         r += 1
 
-    r += 1
     ws.cell(r, 1, _caption(meta, spec, result))
     r += 1
     if sig_on:
         ws.cell(r, 1, _legend(arrows_on, letters_on))
+        r += 1
 
     ws.column_dimensions["A"].width = 34
-    ws.column_dimensions["B"].width = 12
     for i in range(len(vis_cols)):
         ws.column_dimensions[_col_letter(first_col + i)].width = 14
     for j in range(len(summary_cols)):
         ws.column_dimensions[_col_letter(summary_start + j)].width = 12
+    return r
+
+
+def _wrap():
+    from openpyxl.styles import Alignment
+
+    return Alignment(wrap_text=True, vertical="top")
 
 
 def _caption(meta: DatasetMeta, spec: SavedCrosstabSpec, result: CrosstabResponse) -> str:

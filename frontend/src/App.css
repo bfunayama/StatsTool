@@ -690,6 +690,31 @@ button.danger:hover:not(:disabled) {
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   cursor: pointer;
 }
+.ct-export-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+.ct-export-options button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+.ct-export-options button:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.ct-export-options .muted {
+  font-size: 0.8rem;
+}
 .crosstab .ct-top-head {
   text-align: center;
   border-bottom: 1px solid var(--border, #d0d0d0);

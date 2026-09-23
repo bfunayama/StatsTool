@@ -427,15 +427,16 @@ export function saveCrosstabs(
   }).then(handle<DatasetMeta>)
 }
 
-// Export one or more tables to a single .xlsx workbook and trigger a download.
+// Export tables to a single .xlsx workbook and trigger a download. Each sheet
+// holds one or more tables (stacked); the caller decides the grouping.
 export async function exportXlsx(
   id: string,
-  tables: { name: string; spec: SavedCrosstabSpec }[],
+  sheets: { name: string; tables: { name: string; spec: SavedCrosstabSpec }[] }[],
 ): Promise<void> {
   const res = await fetch(`/api/datasets/${id}/export/xlsx`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tables }),
+    body: JSON.stringify({ sheets }),
   })
   if (!res.ok) {
     const detail = await res.json().catch(() => null)

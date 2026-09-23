@@ -448,11 +448,11 @@ def update_crosstabs(dataset_id: str, payload: CrosstabsUpdate) -> DatasetMeta:
 
 @app.post("/api/datasets/{dataset_id}/export/xlsx")
 def export_xlsx(dataset_id: str, payload: ExportRequest) -> Response:
-    """Export one or more crosstabs to a single .xlsx workbook (a sheet each)."""
+    """Export crosstabs to a single .xlsx workbook (grouped into worksheets)."""
     meta, df = _load(dataset_id)
-    if not payload.tables:
+    if not payload.sheets or not any(s.tables for s in payload.sheets):
         raise HTTPException(status_code=400, detail="No tables to export.")
-    data = exporting.build_workbook(meta, df, payload.tables)
+    data = exporting.build_workbook(meta, df, payload.sheets)
     return Response(
         content=data,
         media_type=(

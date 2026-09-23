@@ -506,10 +506,17 @@ class ExportTable(BaseModel):
     spec: SavedCrosstabSpec
 
 
-class ExportRequest(BaseModel):
-    """Export one or more crosstabs to a single workbook (one sheet each)."""
+class ExportSheet(BaseModel):
+    """A worksheet holding one or more tables, stacked with blank-row gaps."""
 
+    name: str
     tables: list[ExportTable]
+
+
+class ExportRequest(BaseModel):
+    """Export crosstabs to a workbook; each sheet holds one or more tables."""
+
+    sheets: list[ExportSheet]
 
 
 # DatasetMeta references Filter before it is defined; resolve the forward ref.
