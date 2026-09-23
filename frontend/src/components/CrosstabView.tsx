@@ -31,7 +31,7 @@ interface Props {
 // Statistics the user can toggle. All are derived from cell counts + bases.
 type CellStat = 'count' | 'col_pct' | 'row_pct' | 'total_pct'
 type SummaryRowStat = 'base_n' | 'eff_n' | 'total_count' | 'total_sum' | 'mean'
-type SummaryColStat = 'row_n'
+type SummaryColStat = 'row_n' | 'base_n' | 'eff_n' | 'total_sum' | 'mean'
 type SigStat = 'letters' | 'arrows'
 
 const CELL_STATS: { key: CellStat; label: string }[] = [
@@ -49,6 +49,10 @@ const SUMMARY_ROW_STATS: { key: SummaryRowStat; label: string }[] = [
 ]
 const SUMMARY_COL_STATS: { key: SummaryColStat; label: string }[] = [
   { key: 'row_n', label: 'Row n' },
+  { key: 'base_n', label: 'Base n' },
+  { key: 'eff_n', label: 'Effective n' },
+  { key: 'total_sum', label: 'Total Sum' },
+  { key: 'mean', label: 'Mean' },
 ]
 const SIG_STATS: { key: SigStat; label: string }[] = [
   { key: 'arrows', label: 'Arrows (vs. rest)' },
@@ -56,6 +60,8 @@ const SIG_STATS: { key: SigStat; label: string }[] = [
 ]
 // Total Sum / Mean only make sense when the row has numeric values.
 const NUMERIC_SUMMARY_ROW: Set<SummaryRowStat> = new Set(['total_sum', 'mean'])
+// Total Sum / Mean summary columns need the column to have numeric values.
+const NUMERIC_SUMMARY_COL: Set<SummaryColStat> = new Set(['total_sum', 'mean'])
 
 // Column value meaning "no crossing variable" — a single Total-sample banner.
 const TOTAL = '__total__'
@@ -1050,12 +1056,42 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return fmtNumber(margins.grandMean)
   }
 
+  // Value of a summary-column statistic for one row (aggregated across columns).
+  function summaryColValue(key: SummaryColStat, ri: number): string {
+    if (!margins || !result) return ''
+    if (key === 'row_n')
+      return fmtCount(result.row_count?.[ri] ?? margins.rowTotals[ri])
+    if (key === 'base_n')
+      return fmtCount(result.row_base?.[ri] ?? margins.rowTotals[ri])
+    if (key === 'eff_n')
+      return fmtCount(
+        result.row_eff_base?.[ri] ??
+          result.row_base?.[ri] ??
+          margins.rowTotals[ri],
+      )
+    // Total Sum / Mean use the columns' numeric values.
+    const cv = result.col_values ?? []
+    let sum = 0
+    let n = 0
+    for (let ci = 0; ci < result.columns.length; ci++) {
+      const v = cv[ci]
+      if (v == null) continue
+      const count = result.cells[ri][ci].count
+      sum += v * count
+      n += count
+    }
+    if (key === 'total_sum') return fmtNumber(sum)
+    return fmtNumber(n ? sum / n : null)
+  }
+
   const numericOk = margins ? margins.hasNumeric : true
+  const colNumericOk = !!result?.col_values?.some((v) => v != null)
   const activeSummaryRows = SUMMARY_ROW_STATS.filter(
     (s) => summaryRows.has(s.key) && (numericOk || !NUMERIC_SUMMARY_ROW.has(s.key)),
   )
-  const activeSummaryCols = SUMMARY_COL_STATS.filter((s) =>
-    summaryCols.has(s.key),
+  const activeSummaryCols = SUMMARY_COL_STATS.filter(
+    (s) =>
+      summaryCols.has(s.key) && (colNumericOk || !NUMERIC_SUMMARY_COL.has(s.key)),
   )
   const cellStatLabels = CELL_STATS.filter((s) => cellStats.has(s.key)).map(
     (s) => s.label,
@@ -2178,16 +2214,24 @@ export function CrosstabView({ meta, onChanged }: Props) {
         </fieldset>
         <fieldset className="ct-stat-group">
           <legend>Summary column</legend>
-          {SUMMARY_COL_STATS.map((s) => (
-            <label key={s.key} className="ct-check">
-              <input
-                type="checkbox"
-                checked={summaryCols.has(s.key)}
-                onChange={() => toggle(setSummaryCols, s.key)}
-              />
-              {s.label}
-            </label>
-          ))}
+          {SUMMARY_COL_STATS.map((s) => {
+            const disabled = !colNumericOk && NUMERIC_SUMMARY_COL.has(s.key)
+            return (
+              <label
+                key={s.key}
+                className="ct-check"
+                title={disabled ? 'Needs a column with numeric values' : undefined}
+              >
+                <input
+                  type="checkbox"
+                  checked={summaryCols.has(s.key)}
+                  disabled={disabled}
+                  onChange={() => toggle(setSummaryCols, s.key)}
+                />
+                {s.label}
+              </label>
+            )
+          })}
         </fieldset>
         <fieldset className="ct-stat-group">
           <legend>Significance (95%)</legend>
@@ -2587,7 +2631,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                     })}
                     {activeSummaryCols.map((s) => (
                       <td key={s.key} className="ct-cell ct-summary">
-                        {s.key === 'row_n' ? margins.rowTotals[ri] : ''}
+                        {summaryColValue(s.key, ri)}
                       </td>
                     ))}
                   </tr>

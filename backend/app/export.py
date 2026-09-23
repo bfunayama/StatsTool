@@ -37,6 +37,14 @@ SUMMARY_ROWS = [
     ("mean", "Mean"),
 ]
 NUMERIC_SUMMARY = {"total_sum", "mean"}
+SUMMARY_COLS = [
+    ("row_n", "Row n"),
+    ("base_n", "Base n"),
+    ("eff_n", "Effective n"),
+    ("total_sum", "Total Sum"),
+    ("mean", "Mean"),
+]
+NUMERIC_SUMMARY_COL = {"total_sum", "mean"}
 
 _INVALID_SHEET = set(r"[]:*?/\\")
 
@@ -99,6 +107,13 @@ def _render_sheet(
         (k, lbl)
         for k, lbl in SUMMARY_ROWS
         if k in display.summary_rows and (numeric_ok or k not in NUMERIC_SUMMARY)
+    ]
+    col_numeric_ok = any(v is not None for v in result.col_values)
+    summary_cols = [
+        (k, lbl)
+        for k, lbl in SUMMARY_COLS
+        if k in display.summary_cols
+        and (col_numeric_ok or k not in NUMERIC_SUMMARY_COL)
     ]
     letters_on = "letters" in display.significance
     arrows_on = "arrows" in display.significance
@@ -203,6 +218,28 @@ def _render_sheet(
             return col_sums[ci] / col_valid[ci] if col_valid[ci] else None
         return None
 
+    # Value of a summary-column statistic for one row (aggregated across columns).
+    def summary_col_value(key: str, ri: int) -> float | None:
+        if key == "row_n":
+            return result.row_count[ri] if ri < len(result.row_count) else row_totals[ri]
+        if key == "base_n":
+            return result.row_base[ri] if ri < len(result.row_base) else row_totals[ri]
+        if key == "eff_n":
+            if ri < len(result.row_eff_base) and result.row_eff_base[ri] is not None:
+                return result.row_eff_base[ri]
+            return result.row_base[ri] if ri < len(result.row_base) else row_totals[ri]
+        s = 0.0
+        n = 0.0
+        for ci, cv in enumerate(result.col_values):
+            if cv is None:
+                continue
+            c = result.cells[ri][ci].count
+            s += cv * c
+            n += c
+        if key == "total_sum":
+            return s
+        return s / n if n else None
+
     def marks(ri: int, ci: int) -> str:
         cell = result.cells[ri][ci]
         parts = ""
@@ -241,10 +278,14 @@ def _render_sheet(
             label = f"{label} ({c.letter})"
         ws.cell(r, pos, label)
         pos += 1
+    for _k, lbl in summary_cols:
+        ws.cell(r, pos, lbl)
+        pos += 1
     r += 1
 
+    summary_start = first_col + len(vis_cols)
     for ri in vis_rows:
-        for key, label in cell_stats:
+        for si, (key, label) in enumerate(cell_stats):
             ws.cell(r, 1, disp_row(result.row_labels[ri]))
             ws.cell(r, 2, label)
             pos = first_col
@@ -266,6 +307,19 @@ def _render_sheet(
                         cell.value = round(value, 1)
                         cell.number_format = '0.0"%"'
                 pos += 1
+            # Summary columns carry one value per row: show on the first stat row.
+            if si == 0:
+                spos = summary_start
+                for sk, _lbl in summary_cols:
+                    val = summary_col_value(sk, ri)
+                    scell = ws.cell(r, spos)
+                    if val is None:
+                        scell.value = ""
+                    elif sk in NUMERIC_SUMMARY_COL:
+                        scell.value = round(val, 2)
+                    else:
+                        scell.value = round(val)
+                    spos += 1
             r += 1
 
     for key, label in summary_rows:
@@ -293,6 +347,8 @@ def _render_sheet(
     ws.column_dimensions["B"].width = 12
     for i in range(len(vis_cols)):
         ws.column_dimensions[_col_letter(first_col + i)].width = 14
+    for j in range(len(summary_cols)):
+        ws.column_dimensions[_col_letter(summary_start + j)].width = 12
 
 
 def _caption(meta: DatasetMeta, spec: SavedCrosstabSpec, result: CrosstabResponse) -> str:

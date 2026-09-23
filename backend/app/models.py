@@ -433,6 +433,12 @@ class CrosstabResponse(BaseModel):
     total_eff_base: float | None = None  # overall Kish effective sample size
     weighted: bool = False
     row_kind: Literal["variable", "multi", "grid", "grid2d"]
+    # Per-row summaries (summary columns): true unweighted n, weighted base, and
+    # Kish effective n; col_values are the columns' numeric values (row Sum/Mean).
+    row_base: list[float] = Field(default_factory=list)
+    row_eff_base: list[float | None] = Field(default_factory=list)
+    row_count: list[float] = Field(default_factory=list)
+    col_values: list[float | None] = Field(default_factory=list)
 
 
 class CrosstabDisplay(BaseModel):

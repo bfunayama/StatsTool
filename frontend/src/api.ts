@@ -196,6 +196,10 @@ export interface CrosstabResponse {
   total_eff_base?: number | null
   weighted: boolean
   row_kind: 'variable' | 'multi' | 'grid' | 'grid2d'
+  row_base?: number[]
+  row_eff_base?: (number | null)[]
+  row_count?: number[]
+  col_values?: (number | null)[]
 }
 
 export interface CrosstabDisplay {

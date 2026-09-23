@@ -165,9 +165,11 @@ def _build_banner(
                 raise CrosstabError(f"Unknown banner variable: {variables[0]}")
             s1 = compute.compute_display_series(df, index, primary)
             if len(variables) == 1:
-                items = [(lbl, s1 == lbl, None) for lbl in _ordered_categories(s1, primary)]
-                for label, mask, _v in _apply_groups(items, seg_groups, idx):
-                    banner.append((label, mask, None))
+                labels1 = _ordered_categories(s1, primary)
+                vals1 = _row_numeric_values(primary, labels1)
+                items = [(lbl, s1 == lbl, v) for lbl, v in zip(labels1, vals1)]
+                for label, mask, cv in _apply_groups(items, seg_groups, idx):
+                    banner.append((label, mask, cv))
                     top.append(primary.label)
                     group.append(f"{si}{_GROUP_SEP}__var__")
                     seg_of.append(si)
@@ -195,9 +197,10 @@ def _build_banner(
         if col_var is None:
             raise CrosstabError(f"Unknown column variable: {request.column}")
         col_series = compute.compute_display_series(df, index, col_var)
+        labels = _ordered_categories(col_series, col_var)
+        vals = _row_numeric_values(col_var, labels)
         banner = [
-            (label, col_series == label, None)
-            for label in _ordered_categories(col_series, col_var)
+            (label, col_series == label, v) for label, v in zip(labels, vals)
         ]
     banner = _apply_groups(banner, request.column_groups, idx)
     # Flat header (no top row) and a single comparison group across all columns.
@@ -301,6 +304,18 @@ def _assemble(
             rows, cells, columns, col_valids, col_n, col_group, wsum, n_of
         )
 
+    # Per-row summaries (shown as summary columns): true unweighted n, weighted
+    # base, and effective n. Column numeric values drive row Sum/Mean.
+    row_base: list[float] = []
+    row_eff_base: list[float | None] = []
+    row_count: list[float] = []
+    for _rlabel, row_mask, _rv in rows:
+        rm = valid & row_mask
+        row_count.append(float(int(rm.sum())))
+        row_base.append(wsum(rm))
+        row_eff_base.append(compute.effective_n(weights[rm]) if weighted else None)
+    col_values = [cv for _l, _m, cv in banner]
+
     total_base = wsum(valid)
     total_eff = compute.effective_n(weights[valid]) if weighted else None
     return CrosstabResponse(
@@ -312,6 +327,10 @@ def _assemble(
         total_eff_base=total_eff,
         weighted=weighted,
         row_kind=row_kind,
+        row_base=row_base,
+        row_eff_base=row_eff_base,
+        row_count=row_count,
+        col_values=col_values,
     )
 
 
