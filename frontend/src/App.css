@@ -423,6 +423,32 @@ select {
 .ct-node.active-folder {
   outline: 1px dashed var(--accent);
 }
+.ct-node {
+  position: relative;
+}
+.ct-node.dragging {
+  opacity: 0.45;
+}
+.ct-node.drop-inside {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 1px solid var(--accent);
+}
+.ct-node.drop-before::before,
+.ct-node.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.ct-node.drop-before::before {
+  top: -1px;
+}
+.ct-node.drop-after::after {
+  bottom: -1px;
+}
 .ct-twisty {
   flex: 0 0 1.1rem;
   min-width: 1.1rem;
@@ -480,6 +506,12 @@ select {
 }
 .ct-root-target.active-folder {
   border-color: var(--accent);
+  color: var(--accent);
+}
+.ct-root-target.drop-inside {
+  border-color: var(--accent);
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 .ct-builder-head {

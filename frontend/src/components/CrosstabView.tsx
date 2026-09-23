@@ -185,6 +185,63 @@ function insertNode(
   )
 }
 
+// Deep copy of a node (and its descendants) with fresh ids and a cloned spec.
+function duplicateNode(node: CrosstabNode, rename = true): CrosstabNode {
+  return {
+    ...node,
+    id: crypto.randomUUID(),
+    name: rename ? `Copy of ${node.name}` : node.name,
+    spec: node.spec ? structuredClone(node.spec) : null,
+    children: node.children.map((c) => duplicateNode(c, false)),
+  }
+}
+
+type DropPosition = 'before' | 'after' | 'inside'
+
+// Insert `node` immediately before/after the sibling identified by targetId,
+// searching recursively. Returns a new tree, or null if target wasn't found.
+function insertRelative(
+  nodes: CrosstabNode[],
+  targetId: string,
+  node: CrosstabNode,
+  position: 'before' | 'after',
+): CrosstabNode[] | null {
+  const idx = nodes.findIndex((n) => n.id === targetId)
+  if (idx >= 0) {
+    const at = position === 'before' ? idx : idx + 1
+    return [...nodes.slice(0, at), node, ...nodes.slice(at)]
+  }
+  let changed = false
+  const mapped = nodes.map((n) => {
+    const res = insertRelative(n.children, targetId, node, position)
+    if (res) {
+      changed = true
+      return { ...n, children: res }
+    }
+    return n
+  })
+  return changed ? mapped : null
+}
+
+// Move a node within the tree relative to a target (reorder or into a folder).
+// A folder can never be dropped into itself or one of its descendants.
+function moveNode(
+  tree: CrosstabNode[],
+  dragId: string,
+  targetId: string | null,
+  position: DropPosition,
+): CrosstabNode[] {
+  if (dragId === targetId) return tree
+  const node = findNode(tree, dragId)
+  if (!node) return tree
+  // Reject dropping onto own subtree.
+  if (targetId && findNode([node], targetId)) return tree
+  const removed = removeNode(tree, dragId)
+  if (position === 'inside') return insertNode(removed, targetId, node)
+  if (targetId === null) return [...removed, node]
+  return insertRelative(removed, targetId, node, position) ?? tree
+}
+
 export function CrosstabView({ meta, onChanged }: Props) {
   const memberless = useMemo(
     () => meta.variables.filter((v) => !v.question_id && v.type !== 'weight'),
@@ -272,6 +329,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<CrosstabNode | null>(null)
+  const [dragNodeId, setDragNodeId] = useState<string | null>(null)
+  const [dropInfo, setDropInfo] = useState<{
+    targetId: string | null
+    position: DropPosition
+  } | null>(null)
   // Multi-select of saved tables for export, plus export progress/error.
   const [exportSel, setExportSel] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
@@ -565,6 +627,22 @@ export function CrosstabView({ meta, onChanged }: Props) {
     const name =
       titleDraft.trim() || (rowValue ? rowLabelFor(rowValue) : 'Table')
     doExport([{ name, spec }])
+  }
+
+  function copySelected() {
+    let next = tree
+    let created = 0
+    // Duplicate each ticked table into its own parent folder.
+    for (const id of exportSel) {
+      const node = findNode(next, id)
+      if (!node) continue
+      const parent = findParentId(next, id, null) ?? null
+      next = insertNode(next, parent, duplicateNode(node))
+      created += 1
+    }
+    if (created === 0) return
+    persistTree(next)
+    setExportSel(new Set())
   }
 
   function toggleExportSel(id: string) {
@@ -1386,14 +1464,78 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setColumnGroups(columnGroups.map((g) => (g.id === id ? { ...g, label } : g)))
   }
 
+  // True when nodeId is inside the currently-dragged node's subtree.
+  function draggedContains(nodeId: string): boolean {
+    if (!dragNodeId) return false
+    const dragged = findNode(tree, dragNodeId)
+    return !!dragged && !!findNode([dragged], nodeId)
+  }
+
+  function onNodeDragStart(e: React.DragEvent, node: CrosstabNode) {
+    setDragNodeId(node.id)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', node.id)
+  }
+
+  function onNodeDragOver(e: React.DragEvent, node: CrosstabNode) {
+    if (!dragNodeId || dragNodeId === node.id || draggedContains(node.id)) return
+    e.preventDefault()
+    const rect = e.currentTarget.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    const h = rect.height
+    let position: DropPosition
+    if (node.kind === 'folder') {
+      if (y < h * 0.25) position = 'before'
+      else if (y > h * 0.75) position = 'after'
+      else position = 'inside'
+    } else {
+      position = y < h / 2 ? 'before' : 'after'
+    }
+    setDropInfo({ targetId: node.id, position })
+  }
+
+  function onNodeDrop(e: React.DragEvent, node: CrosstabNode) {
+    e.preventDefault()
+    if (dragNodeId && dropInfo && dropInfo.targetId === node.id) {
+      persistTree(moveNode(tree, dragNodeId, node.id, dropInfo.position))
+    }
+    setDragNodeId(null)
+    setDropInfo(null)
+  }
+
+  function onNodeDragEnd() {
+    setDragNodeId(null)
+    setDropInfo(null)
+  }
+
+  function onRootDragOver(e: React.DragEvent) {
+    if (!dragNodeId) return
+    e.preventDefault()
+    setDropInfo({ targetId: null, position: 'inside' })
+  }
+
+  function onRootDrop(e: React.DragEvent) {
+    e.preventDefault()
+    if (dragNodeId && dropInfo && dropInfo.targetId === null) {
+      persistTree(moveNode(tree, dragNodeId, null, 'inside'))
+    }
+    setDragNodeId(null)
+    setDropInfo(null)
+  }
+
   function renderNodes(nodes: CrosstabNode[], depth: number) {
     return nodes.flatMap((node) => {
       const isFolder = node.kind === 'folder'
       const isCollapsed = collapsed.has(node.id)
+      const drop = dropInfo && dropInfo.targetId === node.id ? dropInfo.position : null
       const classes = [
         'ct-node',
         node.id === selectedId ? 'selected' : '',
         isFolder && node.id === activeFolderId ? 'active-folder' : '',
+        node.id === dragNodeId ? 'dragging' : '',
+        drop === 'before' ? 'drop-before' : '',
+        drop === 'after' ? 'drop-after' : '',
+        drop === 'inside' ? 'drop-inside' : '',
       ]
         .filter(Boolean)
         .join(' ')
@@ -1402,6 +1544,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
           key={node.id}
           className={classes}
           style={{ paddingLeft: `${depth * 1.1 + 0.25}rem` }}
+          draggable={editingId !== node.id}
+          onDragStart={(e) => onNodeDragStart(e, node)}
+          onDragOver={(e) => onNodeDragOver(e, node)}
+          onDrop={(e) => onNodeDrop(e, node)}
+          onDragEnd={onNodeDragEnd}
         >
           {isFolder ? (
             <button
@@ -1495,6 +1642,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
           >
             Export selected{exportSel.size > 0 ? ` (${exportSel.size})` : ''}
           </button>
+          <button
+            onClick={copySelected}
+            disabled={exportSel.size === 0}
+            title="Duplicate the ticked tables into the same folder"
+          >
+            Duplicate selected{exportSel.size > 0 ? ` (${exportSel.size})` : ''}
+          </button>
           {exporting && <span className="muted">Exporting…</span>}
         </div>
         {treeError && <p className="error">{treeError}</p>}
@@ -1506,8 +1660,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
           )}
           {renderNodes(tree, 0)}
           <button
-            className={`ct-root-target${activeFolderId === null ? ' active-folder' : ''}`}
+            className={`ct-root-target${activeFolderId === null ? ' active-folder' : ''}${
+              dropInfo && dropInfo.targetId === null ? ' drop-inside' : ''
+            }`}
             onClick={() => setActiveFolderId(null)}
+            onDragOver={onRootDragOver}
+            onDrop={onRootDrop}
             title="New items go to the top level"
           >
             Top level
