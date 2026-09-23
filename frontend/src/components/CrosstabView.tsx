@@ -8,6 +8,7 @@ import {
 import {
   runCrosstab,
   saveCrosstabs,
+  exportXlsx,
   type BannerColumnGroup,
   type BannerSegment,
   type CrosstabColumn,
@@ -256,6 +257,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [treeError, setTreeError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  // Multi-select of saved tables for export, plus export progress/error.
+  const [exportSel, setExportSel] = useState<Set<string>>(new Set())
+  const [exporting, setExporting] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const [sidebarWidth, setSidebarWidth] = useState(
     () => Number(localStorage.getItem('statstool.ctSidebar')) || 240,
@@ -430,6 +434,63 @@ export function CrosstabView({ meta, onChanged }: Props) {
     if (!confirm(`Delete "${node.name}" (${what})?`)) return
     persistTree(removeNode(tree, node.id))
     if (selectedId && findNode([node], selectedId)) setSelectedId(null)
+  }
+
+  // All saved crosstab nodes (flattened) that carry a spec.
+  function collectCrosstabNodes(nodes: CrosstabNode[]): CrosstabNode[] {
+    const out: CrosstabNode[] = []
+    for (const node of nodes) {
+      if (node.kind === 'crosstab' && node.spec) out.push(node)
+      out.push(...collectCrosstabNodes(node.children))
+    }
+    return out
+  }
+
+  async function doExport(tables: { name: string; spec: SavedCrosstabSpec }[]) {
+    if (tables.length === 0) {
+      setTreeError('No tables to export.')
+      return
+    }
+    setExporting(true)
+    setTreeError(null)
+    try {
+      await exportXlsx(meta.id, tables)
+    } catch (err) {
+      setTreeError(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  function exportAll() {
+    doExport(
+      collectCrosstabNodes(tree).map((n) => ({ name: n.name, spec: n.spec! })),
+    )
+  }
+
+  function exportSelected() {
+    doExport(
+      collectCrosstabNodes(tree)
+        .filter((n) => exportSel.has(n.id))
+        .map((n) => ({ name: n.name, spec: n.spec! })),
+    )
+  }
+
+  function exportCurrent() {
+    const spec = currentSpec()
+    if (!spec) return
+    const name =
+      titleDraft.trim() || (rowValue ? rowLabelFor(rowValue) : 'Table')
+    doExport([{ name, spec }])
+  }
+
+  function toggleExportSel(id: string) {
+    setExportSel((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   function rowLabelFor(value: string): string {
@@ -1268,7 +1329,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
               {isCollapsed ? '▸' : '▾'}
             </button>
           ) : (
-            <span className="ct-twisty" />
+            <input
+              type="checkbox"
+              className="ct-node-check"
+              checked={exportSel.has(node.id)}
+              onChange={() => toggleExportSel(node.id)}
+              title="Tick to include in Export selected"
+            />
           )}
           {editingId === node.id ? (
             <input
@@ -1323,6 +1390,23 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <button onClick={newFolder} title="New folder">
             + Folder
           </button>
+        </div>
+        <div className="ct-tree-export">
+          <button
+            onClick={exportAll}
+            disabled={exporting || collectCrosstabNodes(tree).length === 0}
+            title="Export every saved table to one Excel workbook"
+          >
+            Export all
+          </button>
+          <button
+            onClick={exportSelected}
+            disabled={exporting || exportSel.size === 0}
+            title="Export the ticked tables to one Excel workbook"
+          >
+            Export selected{exportSel.size > 0 ? ` (${exportSel.size})` : ''}
+          </button>
+          {exporting && <span className="muted">Exporting…</span>}
         </div>
         {treeError && <p className="error">{treeError}</p>}
         <div className="ct-tree-body">
@@ -1387,6 +1471,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
               Save as table
             </button>
           )}
+          <button
+            disabled={!builderSpec || exporting}
+            onClick={exportCurrent}
+            title="Export this table to Excel"
+          >
+            Export
+          </button>
           <span className="spacer" />
           {loading && <span className="muted">Computing…</span>}
         </div>

@@ -421,6 +421,31 @@ export function saveCrosstabs(
   }).then(handle<DatasetMeta>)
 }
 
+// Export one or more tables to a single .xlsx workbook and trigger a download.
+export async function exportXlsx(
+  id: string,
+  tables: { name: string; spec: SavedCrosstabSpec }[],
+): Promise<void> {
+  const res = await fetch(`/api/datasets/${id}/export/xlsx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tables }),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null)
+    throw new Error(detail?.detail ?? 'Export failed')
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'statstool-export.xlsx'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export function getDistinct(
   id: string,
   variable: string,

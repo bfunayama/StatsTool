@@ -7,8 +7,17 @@ import copy
 import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
-from . import compute, crosstab as crosstabbing, detect, filters as filtering, ingest, storage
+from . import (
+    compute,
+    crosstab as crosstabbing,
+    detect,
+    export as exporting,
+    filters as filtering,
+    ingest,
+    storage,
+)
 from .models import (
     BandRecode,
     BandRequest,
@@ -26,6 +35,7 @@ from .models import (
     DatasetSummary,
     DistinctResponse,
     DistinctValue,
+    ExportRequest,
     Filter,
     FilterCountResponse,
     FiltersUpdate,
@@ -434,6 +444,24 @@ def update_crosstabs(dataset_id: str, payload: CrosstabsUpdate) -> DatasetMeta:
     meta.crosstabs = payload.crosstabs
     storage.save_meta(meta)
     return meta
+
+
+@app.post("/api/datasets/{dataset_id}/export/xlsx")
+def export_xlsx(dataset_id: str, payload: ExportRequest) -> Response:
+    """Export one or more crosstabs to a single .xlsx workbook (a sheet each)."""
+    meta, df = _load(dataset_id)
+    if not payload.tables:
+        raise HTTPException(status_code=400, detail="No tables to export.")
+    data = exporting.build_workbook(meta, df, payload.tables)
+    return Response(
+        content=data,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": 'attachment; filename="statstool-export.xlsx"'
+        },
+    )
 
 
 @app.get("/api/datasets/{dataset_id}/preview", response_model=PreviewResponse)

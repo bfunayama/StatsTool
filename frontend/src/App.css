@@ -677,6 +677,20 @@ button.danger:hover:not(:disabled) {
 .ct-banner-clear {
   color: var(--muted);
 }
+.ct-tree-export {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.25rem 0 0.4rem;
+  align-items: center;
+}
+.ct-tree-export button {
+  font-size: 0.8rem;
+}
+.ct-node-check {
+  margin: 0 0.15rem 0 0.1rem;
+  flex: none;
+}
 .sig-compare {
   margin: 0.25rem 0 0.75rem;
   padding-left: 1.1rem;

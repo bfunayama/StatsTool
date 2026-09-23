@@ -489,6 +489,19 @@ class CrosstabsUpdate(BaseModel):
     crosstabs: list[CrosstabNode]
 
 
+class ExportTable(BaseModel):
+    """One table to write to an Excel sheet: a display name and its spec."""
+
+    name: str
+    spec: SavedCrosstabSpec
+
+
+class ExportRequest(BaseModel):
+    """Export one or more crosstabs to a single workbook (one sheet each)."""
+
+    tables: list[ExportTable]
+
+
 # DatasetMeta references Filter before it is defined; resolve the forward ref.
 CrosstabNode.model_rebuild()
 DatasetMeta.model_rebuild()
