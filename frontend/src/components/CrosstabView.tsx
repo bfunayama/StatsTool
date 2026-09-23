@@ -1353,6 +1353,47 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setSelCats(new Set())
   }
 
+  // Merge a dragged banner sub-column onto another, within the same segment.
+  function bannerMerge(seg: number, srcLabel: string, target: CrosstabColumn) {
+    if (seg !== (target.seg ?? -1) || srcLabel === target.label) return
+    const sg = bannerGroups.find((g) => g.seg === seg && g.label === srcLabel)
+    const tg = bannerGroups.find((g) => g.seg === seg && g.label === target.label)
+    const srcMembers = sg ? sg.members : [srcLabel]
+    const tgtMembers = tg ? tg.members : [target.label]
+    const members = Array.from(new Set([...tgtMembers, ...srcMembers]))
+    const relabel = (mode: 'net' | 'merge', current: string) =>
+      mode === 'net' ? current : members.join(' / ')
+    if (!sg && !tg) {
+      const label = uniqueBannerLabel(members.join(' / '), seg)
+      setBannerGroups([
+        ...bannerGroups,
+        { id: crypto.randomUUID(), seg, label, members, mode: 'merge' },
+      ])
+    } else if (tg && !sg) {
+      setBannerGroups(
+        bannerGroups.map((g) =>
+          g.id === tg.id ? { ...g, members, label: relabel(g.mode, g.label) } : g,
+        ),
+      )
+    } else if (sg && !tg) {
+      setBannerGroups(
+        bannerGroups.map((g) =>
+          g.id === sg.id ? { ...g, members, label: relabel(g.mode, g.label) } : g,
+        ),
+      )
+    } else if (sg && tg && sg.id !== tg.id) {
+      // Combine both groups into the target, drop the source group.
+      setBannerGroups(
+        bannerGroups
+          .filter((g) => g.id !== sg.id)
+          .map((g) =>
+            g.id === tg.id ? { ...g, members, label: relabel(g.mode, g.label) } : g,
+          ),
+      )
+    }
+    setSelCats(new Set())
+  }
+
   function ungroupBanner(seg: number, label: string) {
     setBannerGroups((prev) =>
       prev.filter((g) => !(g.seg === seg && g.label === label)),
@@ -1492,8 +1533,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
     }
   }
 
-  function startDrag(e: ReactDragEvent, dim: 'row' | 'col', label: string) {
-    e.dataTransfer.setData('text/plain', JSON.stringify({ dim, label }))
+  function startDrag(
+    e: ReactDragEvent,
+    dim: 'row' | 'col',
+    label: string,
+    seg?: number,
+  ) {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ dim, label, seg }))
     e.dataTransfer.effectAllowed = 'move'
   }
 
@@ -1547,7 +1593,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     e.preventDefault()
     setDropTarget(null)
     if (!result) return
-    let data: { dim: string; label: string } | null = null
+    let data: { dim: string; label: string; seg?: number } | null = null
     try {
       data = JSON.parse(e.dataTransfer.getData('text/plain'))
     } catch {
@@ -1556,6 +1602,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
     if (!data || data.dim !== dim) return
     const mode = headerDropMode(e, orient, allowGroup)
     if (mode === 'group') {
+      // Advanced banner sub-columns merge into a banner group, not a legacy one.
+      if (dim === 'col' && advancedBanner) {
+        const target = result.columns[targetIdx]
+        bannerMerge(data.seg ?? (target.seg ?? -1), data.label, target)
+        return
+      }
       const targetLabel =
         dim === 'row'
           ? result.row_labels[targetIdx]
@@ -2411,10 +2463,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
                             selCats.has(key) ? ' ct-selected' : ''
                           }${dropClass(`leaf:${ci}`)}`}
                           onDragOver={(e) =>
-                            onHeaderDragOver(e, `leaf:${ci}`, 'h', false)
+                            onHeaderDragOver(e, `leaf:${ci}`, 'h', true)
                           }
                           onDragLeave={() => onHeaderDragLeave(`leaf:${ci}`)}
-                          onDrop={(e) => onHeaderDrop(e, 'col', ci, 'h', false)}
+                          onDrop={(e) => onHeaderDrop(e, 'col', ci, 'h', true)}
                           onContextMenu={(e) => {
                             e.preventDefault()
                             setAdvMenu({
@@ -2443,7 +2495,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                             <span
                               className={grp ? 'ct-drag ct-group-head' : 'ct-drag'}
                               draggable
-                              onDragStart={(e) => startDrag(e, 'col', c.label)}
+                              onDragStart={(e) => startDrag(e, 'col', c.label, c.seg)}
                               onClick={(e) => {
                                 if (e.metaKey || e.ctrlKey || e.shiftKey)
                                   toggleCat(key, true)
