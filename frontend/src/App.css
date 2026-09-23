@@ -189,6 +189,21 @@ select {
   outline-offset: -2px;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.crosstab .ct-colhead {
+  position: relative;
+}
+.crosstab .ct-colhead.ct-drop-before {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.crosstab .ct-colhead.ct-drop-after {
+  box-shadow: inset -3px 0 0 var(--accent);
+}
+.crosstab .ct-rowhead.ct-drop-before {
+  box-shadow: inset 0 3px 0 var(--accent);
+}
+.crosstab .ct-rowhead.ct-drop-after {
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
 .crosstab .ct-group-head {
   font-style: italic;
 }

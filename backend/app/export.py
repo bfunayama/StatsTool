@@ -119,6 +119,25 @@ def _render_sheet(
     vis_rows = [
         ri for ri, lbl in enumerate(result.row_labels) if lbl not in spec.row_hidden
     ]
+    # Display-only reorder: labels in spec order first, others keep natural order.
+    # Columns reorder leaves only within their banner parent/segment (same group).
+    if spec.row_order:
+        rank = {lbl: i for i, lbl in enumerate(spec.row_order)}
+        vis_rows.sort(key=lambda ri: (rank.get(result.row_labels[ri], len(rank)), ri))
+    if spec.column_order:
+        rank = {lbl: i for i, lbl in enumerate(spec.column_order)}
+        runs: list[list[int]] = []
+        for ci in vis_cols:
+            g = result.columns[ci].group or ""
+            if runs and (result.columns[runs[-1][0]].group or "") == g:
+                runs[-1].append(ci)
+            else:
+                runs.append([ci])
+        ordered: list[int] = []
+        for run in runs:
+            run.sort(key=lambda ci: (rank.get(result.columns[ci].label, len(rank)), ci))
+            ordered.extend(run)
+        vis_cols = ordered
     sig_on = (letters_on or arrows_on) and len(vis_cols) >= 2
 
     def disp_col(c) -> str:

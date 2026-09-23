@@ -302,7 +302,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [rowGroups, setRowGroups] = useState<CrosstabGroup[]>([])
   const [columnGroups, setColumnGroups] = useState<CrosstabGroup[]>([])
   // Drag-and-drop + right-click state for building/undoing groups.
-  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<
+    { key: string; mode: 'before' | 'after' | 'group' } | null
+  >(null)
   const [menu, setMenu] = useState<
     { x: number; y: number; dim: 'row' | 'col'; label: string } | null
   >(null)
@@ -327,6 +329,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [colRenames, setColRenames] = useState<Record<string, string>>({})
   const [rowHidden, setRowHidden] = useState<Set<string>>(new Set())
   const [colHidden, setColHidden] = useState<Set<string>>(new Set())
+  // Display-only reorder: labels in chosen order (others keep natural order).
+  const [rowOrderList, setRowOrderList] = useState<string[]>([])
+  const [colOrderList, setColOrderList] = useState<string[]>([])
 
   // Saved-crosstab tree (folders + saved tables), persisted on the dataset.
   const [tree, setTree] = useState<CrosstabNode[]>(meta.crosstabs ?? [])
@@ -404,6 +409,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
       banner_cat_hidden: [...catHidden],
       banner_parent_renames: parentRenames,
       banner_parent_hidden: [...parentHidden],
+      row_order: rowOrderList,
+      column_order: colOrderList,
     }
   }
 
@@ -428,6 +435,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setCatHidden(new Set(spec.banner_cat_hidden ?? []))
     setParentRenames(spec.banner_parent_renames ?? {})
     setParentHidden(new Set(spec.banner_parent_hidden ?? []))
+    setRowOrderList(spec.row_order ?? [])
+    setColOrderList(spec.column_order ?? [])
     setSelCats(new Set())
     setSelRows(new Set())
     setSelCols(new Set())
@@ -477,6 +486,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setColRenames({})
     setRowHidden(new Set())
     setColHidden(new Set())
+    setRowOrderList([])
+    setColOrderList([])
     setCatHidden(new Set())
     setCatRenames({})
     setParentHidden(new Set())
@@ -503,6 +514,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setColRenames({})
     setRowHidden(new Set())
     setColHidden(new Set())
+    setRowOrderList([])
+    setColOrderList([])
     setCatHidden(new Set())
     setCatRenames({})
     setParentHidden(new Set())
@@ -1063,21 +1076,63 @@ export function CrosstabView({ meta, onChanged }: Props) {
     for (const c of result.columns)
       if (!colGroupLabels.has(c.label)) colOrder.set(c.label, j++)
   }
+  // Apply the user's display reorder (labels not listed keep natural order).
+  function orderRank(list: string[], label: string): number {
+    const i = list.indexOf(label)
+    return i < 0 ? Infinity : i
+  }
+  function orderRows(idx: number[]): number[] {
+    if (!result || rowOrderList.length === 0) return idx
+    const nat = new Map(idx.map((v, i) => [v, i]))
+    return [...idx].sort((a, b) => {
+      const ra = orderRank(rowOrderList, result!.row_labels[a])
+      const rb = orderRank(rowOrderList, result!.row_labels[b])
+      if (ra !== rb) return ra - rb
+      return nat.get(a)! - nat.get(b)!
+    })
+  }
+  function orderColumns(idx: number[]): number[] {
+    if (!result || colOrderList.length === 0) return idx
+    // Reorder leaves only within contiguous runs sharing a banner group.
+    const runs: number[][] = []
+    for (const ci of idx) {
+      const g = result!.columns[ci].group ?? ''
+      const last = runs[runs.length - 1]
+      if (last && (result!.columns[last[0]].group ?? '') === g) last.push(ci)
+      else runs.push([ci])
+    }
+    const out: number[] = []
+    for (const run of runs) {
+      const nat = new Map(run.map((v, i) => [v, i]))
+      run.sort((a, b) => {
+        const ra = orderRank(colOrderList, result!.columns[a].label)
+        const rb = orderRank(colOrderList, result!.columns[b].label)
+        if (ra !== rb) return ra - rb
+        return nat.get(a)! - nat.get(b)!
+      })
+      out.push(...run)
+    }
+    return out
+  }
   // Visible (not hidden) row/column indices into the result.
   const visColIdx = result
-    ? result.columns
-        .map((_c, i) => i)
-        .filter((i) => {
-          const c = result.columns[i]
-          if (advancedBanner)
-            return !catHidden.has(catKey(c)) && !parentHidden.has(c.group ?? '')
-          return !colHidden.has(c.label)
-        })
+    ? orderColumns(
+        result.columns
+          .map((_c, i) => i)
+          .filter((i) => {
+            const c = result.columns[i]
+            if (advancedBanner)
+              return !catHidden.has(catKey(c)) && !parentHidden.has(c.group ?? '')
+            return !colHidden.has(c.label)
+          }),
+      )
     : []
   const visRowIdx = result
-    ? result.row_labels
-        .map((_l, i) => i)
-        .filter((i) => !rowHidden.has(result.row_labels[i]))
+    ? orderRows(
+        result.row_labels
+          .map((_l, i) => i)
+          .filter((i) => !rowHidden.has(result.row_labels[i])),
+      )
     : []
   const hiddenRowList = result
     ? result.row_labels.filter((l) => rowHidden.has(l))
@@ -1160,6 +1215,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setColRenames(rowRenames)
     setRowHidden(colHidden)
     setColHidden(rowHidden)
+    setRowOrderList(colOrderList)
+    setColOrderList(rowOrderList)
     setSelRows(new Set())
     setSelCols(new Set())
   }
@@ -1170,6 +1227,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setRowGroups([])
     setRowRenames({})
     setRowHidden(new Set())
+    setRowOrderList([])
     setSelRows(new Set())
     setAnchorRow(null)
   }
@@ -1179,6 +1237,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setColumnGroups([])
     setColRenames({})
     setColHidden(new Set())
+    setColOrderList([])
     setSelCols(new Set())
     setAnchorCol(null)
   }
@@ -1402,15 +1461,110 @@ export function CrosstabView({ meta, onChanged }: Props) {
     e.dataTransfer.effectAllowed = 'move'
   }
 
-  function onDropHeader(e: ReactDragEvent, dim: 'row' | 'col', target: string) {
+  // Which third of a header the pointer is over: edges reorder, centre groups.
+  function headerDropMode(
+    e: ReactDragEvent,
+    orient: 'h' | 'v',
+    allowGroup: boolean,
+  ): 'before' | 'after' | 'group' {
+    const r = e.currentTarget.getBoundingClientRect()
+    const f =
+      orient === 'h'
+        ? (e.clientX - r.left) / r.width
+        : (e.clientY - r.top) / r.height
+    if (!allowGroup) return f < 0.5 ? 'before' : 'after'
+    if (f < 0.34) return 'before'
+    if (f > 0.66) return 'after'
+    return 'group'
+  }
+
+  function dropClass(key: string): string {
+    if (!dropTarget || dropTarget.key !== key) return ''
+    if (dropTarget.mode === 'group') return ' ct-drop'
+    return dropTarget.mode === 'before' ? ' ct-drop-before' : ' ct-drop-after'
+  }
+
+  function onHeaderDragOver(
+    e: ReactDragEvent,
+    key: string,
+    orient: 'h' | 'v',
+    allowGroup: boolean,
+  ) {
+    e.preventDefault()
+    const mode = headerDropMode(e, orient, allowGroup)
+    setDropTarget((t) =>
+      t && t.key === key && t.mode === mode ? t : { key, mode },
+    )
+  }
+
+  function onHeaderDragLeave(key: string) {
+    setDropTarget((t) => (t && t.key === key ? null : t))
+  }
+
+  function onHeaderDrop(
+    e: ReactDragEvent,
+    dim: 'row' | 'col',
+    targetIdx: number,
+    orient: 'h' | 'v',
+    allowGroup: boolean,
+  ) {
     e.preventDefault()
     setDropTarget(null)
+    if (!result) return
+    let data: { dim: string; label: string } | null = null
     try {
-      const data = JSON.parse(e.dataTransfer.getData('text/plain'))
-      if (data && data.dim === dim) applyDrop(dim, data.label, target)
+      data = JSON.parse(e.dataTransfer.getData('text/plain'))
     } catch {
-      // ignore malformed drops
+      return
     }
+    if (!data || data.dim !== dim) return
+    const mode = headerDropMode(e, orient, allowGroup)
+    if (mode === 'group') {
+      const targetLabel =
+        dim === 'row'
+          ? result.row_labels[targetIdx]
+          : result.columns[targetIdx].label
+      applyDrop(dim, data.label, targetLabel)
+      return
+    }
+    if (dim === 'row') reorderRow(data.label, result.row_labels[targetIdx], mode)
+    else reorderCol(data.label, targetIdx, mode)
+  }
+
+  // Move a row label before/after another in the display order.
+  function reorderRow(source: string, target: string, pos: 'before' | 'after') {
+    if (!result || source === target) return
+    const nat = new Map(result.row_labels.map((l, i) => [l, i]))
+    const cur = [...result.row_labels].sort((a, b) => {
+      const ra = orderRank(rowOrderList, a)
+      const rb = orderRank(rowOrderList, b)
+      if (ra !== rb) return ra - rb
+      return nat.get(a)! - nat.get(b)!
+    })
+    const without = cur.filter((l) => l !== source)
+    const ti = without.indexOf(target)
+    if (ti < 0) return
+    without.splice(pos === 'before' ? ti : ti + 1, 0, source)
+    setRowOrderList(without)
+  }
+
+  // Move a column leaf before/after another within its banner parent/segment.
+  function reorderCol(source: string, targetIdx: number, pos: 'before' | 'after') {
+    if (!result) return
+    const g = result.columns[targetIdx].group ?? ''
+    const target = result.columns[targetIdx].label
+    if (source === target) return
+    const runLabels = visColIdx
+      .filter((ci) => (result!.columns[ci].group ?? '') === g)
+      .map((ci) => result!.columns[ci].label)
+    if (!runLabels.includes(source)) return // within-parent only
+    const without = runLabels.filter((l) => l !== source)
+    const ti = without.indexOf(target)
+    if (ti < 0) return
+    without.splice(pos === 'before' ? ti : ti + 1, 0, source)
+    const runSet = new Set(runLabels)
+    const others = colOrderList.filter((l) => !runSet.has(l))
+    setColOrderList([...others, ...without])
   }
 
   function ungroup(dim: 'row' | 'col', label: string) {
@@ -2211,7 +2365,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           key={ci}
                           className={`ct-colhead${
                             selCats.has(key) ? ' ct-selected' : ''
-                          }`}
+                          }${dropClass(`leaf:${ci}`)}`}
+                          onDragOver={(e) =>
+                            onHeaderDragOver(e, `leaf:${ci}`, 'h', false)
+                          }
+                          onDragLeave={() => onHeaderDragLeave(`leaf:${ci}`)}
+                          onDrop={(e) => onHeaderDrop(e, 'col', ci, 'h', false)}
                           onContextMenu={(e) => {
                             e.preventDefault()
                             setAdvMenu({
@@ -2238,7 +2397,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
                             />
                           ) : (
                             <span
-                              className={grp ? 'ct-group-head' : undefined}
+                              className={grp ? 'ct-drag ct-group-head' : 'ct-drag'}
+                              draggable
+                              onDragStart={(e) => startDrag(e, 'col', c.label)}
                               onClick={(e) => {
                                 if (e.metaKey || e.ctrlKey || e.shiftKey)
                                   toggleCat(key, true)
@@ -2270,21 +2431,18 @@ export function CrosstabView({ meta, onChanged }: Props) {
                 {visColIdx.map((ci) => {
                   const c = result.columns[ci]
                   const isGroup = colGroupLabels.has(c.label)
-                  const key = `col:${c.label}`
+                  const key = `col:${ci}`
                   const editing =
                     headerEdit?.dim === 'col' && headerEdit.label === c.label
                   return (
                     <th
                       key={c.label}
-                      className={`ct-colhead${dropTarget === key ? ' ct-drop' : ''}${
+                      className={`ct-colhead${dropClass(key)}${
                         selCols.has(c.label) ? ' ct-selected' : ''
                       }`}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDragEnter={() => setDropTarget(key)}
-                      onDragLeave={() =>
-                        setDropTarget((t) => (t === key ? null : t))
-                      }
-                      onDrop={(e) => onDropHeader(e, 'col', c.label)}
+                      onDragOver={(e) => onHeaderDragOver(e, key, 'h', true)}
+                      onDragLeave={() => onHeaderDragLeave(key)}
+                      onDrop={(e) => onHeaderDrop(e, 'col', ci, 'h', true)}
                       onContextMenu={(e) => {
                         e.preventDefault()
                         setMenu({ x: e.clientX, y: e.clientY, dim: 'col', label: c.label })
@@ -2333,19 +2491,18 @@ export function CrosstabView({ meta, onChanged }: Props) {
               {visRowIdx.map((ri) => {
                 const label = result.row_labels[ri]
                 const isGroup = rowGroupLabels.has(label)
-                const key = `row:${label}`
+                const key = `row:${ri}`
                 const editing =
                   headerEdit?.dim === 'row' && headerEdit.label === label
                 return (
                   <tr key={label}>
                     <th
-                      className={`ct-rowhead${dropTarget === key ? ' ct-drop' : ''}${
+                      className={`ct-rowhead${dropClass(key)}${
                         selRows.has(label) ? ' ct-selected' : ''
                       }`}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDragEnter={() => setDropTarget(key)}
-                      onDragLeave={() => setDropTarget((t) => (t === key ? null : t))}
-                      onDrop={(e) => onDropHeader(e, 'row', label)}
+                      onDragOver={(e) => onHeaderDragOver(e, key, 'v', true)}
+                      onDragLeave={() => onHeaderDragLeave(key)}
+                      onDrop={(e) => onHeaderDrop(e, 'row', ri, 'v', true)}
                       onContextMenu={(e) => {
                         e.preventDefault()
                         setMenu({ x: e.clientX, y: e.clientY, dim: 'row', label })

@@ -466,6 +466,10 @@ class SavedCrosstabSpec(BaseModel):
     banner_cat_hidden: list[str] = Field(default_factory=list)
     banner_parent_renames: dict[str, str] = Field(default_factory=dict)
     banner_parent_hidden: list[str] = Field(default_factory=list)
+    # Display-only reorder: labels in the user's chosen order (others follow
+    # natural order). Columns reorder within their banner parent/segment.
+    row_order: list[str] = Field(default_factory=list)
+    column_order: list[str] = Field(default_factory=list)
 
 
 class CrosstabNode(BaseModel):

@@ -242,6 +242,8 @@ export interface SavedCrosstabSpec {
   banner_cat_hidden?: string[]
   banner_parent_renames?: Record<string, string>
   banner_parent_hidden?: string[]
+  row_order?: string[]
+  column_order?: string[]
 }
 
 export interface CrosstabNode {
