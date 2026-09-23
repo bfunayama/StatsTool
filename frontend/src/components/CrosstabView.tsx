@@ -140,6 +140,20 @@ function findNode(nodes: CrosstabNode[], id: string): CrosstabNode | null {
   return null
 }
 
+// Id of the folder that contains `childId` (null = top level; undefined = absent).
+function findParentId(
+  nodes: CrosstabNode[],
+  childId: string,
+  parent: string | null,
+): string | null | undefined {
+  for (const node of nodes) {
+    if (node.id === childId) return parent
+    const found = findParentId(node.children, childId, node.id)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 function updateNode(
   nodes: CrosstabNode[],
   id: string,
@@ -186,7 +200,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   )
 
   const [rowValue, setRowValue] = useState('')
-  const [colValue, setColValue] = useState('')
+  const [colValue, setColValue] = useState(TOTAL)
   // Advanced banner: side-by-side segments, each 1 variable or a 2-level nest.
   // Empty = simple mode (use the single Column dropdown, with column NET/hide).
   const [bannerSegments, setBannerSegments] = useState<BannerSegment[]>([])
@@ -215,10 +229,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [cellStats, setCellStats] = useState<Set<CellStat>>(
-    () => new Set<CellStat>(['count', 'col_pct']),
+    () => new Set<CellStat>(['col_pct']),
   )
   const [summaryRows, setSummaryRows] = useState<Set<SummaryRowStat>>(
-    () => new Set<SummaryRowStat>(['base_n']),
+    () => new Set<SummaryRowStat>(['total_count']),
   )
   const [summaryCols, setSummaryCols] = useState<Set<SummaryColStat>>(
     () => new Set<SummaryColStat>(),
@@ -257,6 +271,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [treeError, setTreeError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState<CrosstabNode | null>(null)
   // Multi-select of saved tables for export, plus export progress/error.
   const [exportSel, setExportSel] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
@@ -363,6 +378,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
     loadSpec(node.spec)
     setSelectedId(node.id)
     setTitleDraft(node.name)
+    // New tables should save alongside the one you opened.
+    setActiveFolderId(findParentId(tree, node.id, null) ?? null)
   }
 
   function closeTable() {
@@ -370,22 +387,48 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setTitleDraft('')
   }
 
-  // Reset the builder to a blank new crosstab (keeps the active folder target).
+  // Blank builder with the default selections (used by the "+ Table" button).
   function newCrosstab() {
     setSelectedId(null)
     setTitleDraft('')
     setRowValue('')
-    setColValue('')
+    setColValue(TOTAL)
     setBannerSegments([])
     setBannerGroups([])
     setFilterId('')
     setWeightId('')
-    setCellStats(new Set<CellStat>(['count', 'col_pct']))
-    setSummaryRows(new Set<SummaryRowStat>(['base_n']))
+    setCellStats(new Set<CellStat>(['col_pct']))
+    setSummaryRows(new Set<SummaryRowStat>(['total_count']))
     setSummaryCols(new Set<SummaryColStat>())
     setSig(new Set<SigStat>())
     setRowGroups([])
     setColumnGroups([])
+    setRowRenames({})
+    setColRenames({})
+    setRowHidden(new Set())
+    setColHidden(new Set())
+    setCatHidden(new Set())
+    setCatRenames({})
+    setParentHidden(new Set())
+    setParentRenames({})
+    setSelCats(new Set())
+    setSelRows(new Set())
+    setSelCols(new Set())
+    setSelCells(new Set())
+    setAnchorRow(null)
+    setAnchorCol(null)
+    setHeaderEdit(null)
+  }
+
+  // After saving, carry the analysis config (row, column, weight, filter, stats,
+  // significance) into a fresh unsaved table; only the saved-table link, title,
+  // and table-specific groups/renames/hides are cleared.
+  function carryOverToNewTable() {
+    setSelectedId(null)
+    setTitleDraft('')
+    setRowGroups([])
+    setColumnGroups([])
+    setBannerGroups([])
     setRowRenames({})
     setColRenames({})
     setRowHidden(new Set())
@@ -436,7 +479,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     }
     persistTree(insertNode(tree, activeFolderId, node))
     // Move on to a fresh crosstab; the saved one now lives in the tree.
-    newCrosstab()
+    carryOverToNewTable()
   }
 
   function saveTable() {
@@ -449,6 +492,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
         name: titleDraft.trim() || selectedNode.name,
       }),
     )
+    // Move on to a fresh crosstab after saving, like "Save as table".
+    carryOverToNewTable()
   }
 
   function startRename(node: CrosstabNode) {
@@ -463,10 +508,15 @@ export function CrosstabView({ meta, onChanged }: Props) {
   }
 
   function deleteNode(node: CrosstabNode) {
-    const what = node.kind === 'folder' ? 'folder and everything in it' : 'table'
-    if (!confirm(`Delete "${node.name}" (${what})?`)) return
+    setConfirmDelete(node)
+  }
+
+  function confirmDeleteNode() {
+    const node = confirmDelete
+    if (!node) return
     persistTree(removeNode(tree, node.id))
     if (selectedId && findNode([node], selectedId)) setSelectedId(null)
+    setConfirmDelete(null)
   }
 
   // All saved crosstab nodes (flattened) that carry a spec.
@@ -1420,7 +1470,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
         <div className="ct-tree-head">
           <strong>Tables</strong>
           <span className="spacer" />
-          <button onClick={newCrosstab} title="Start a new blank crosstab">
+          <button
+            onClick={newCrosstab}
+            title="Start a new blank crosstab with default selections"
+          >
             + Table
           </button>
           <button onClick={newFolder} title="New folder">
@@ -2479,6 +2532,33 @@ export function CrosstabView({ meta, onChanged }: Props) {
             <div className="modal-actions">
               <button className="primary" onClick={() => setSigTest(null)}>
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmDelete && (
+        <div className="modal-backdrop" onClick={() => setConfirmDelete(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Delete {confirmDelete.kind === 'folder' ? 'folder' : 'table'}</h3>
+              <button
+                className="expand"
+                onClick={() => setConfirmDelete(null)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="muted">
+              {confirmDelete.kind === 'folder'
+                ? `Delete "${confirmDelete.name}" and everything in it? This cannot be undone.`
+                : `Delete "${confirmDelete.name}"? This cannot be undone.`}
+            </p>
+            <div className="modal-actions">
+              <button onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button className="danger" onClick={confirmDeleteNode}>
+                Delete
               </button>
             </div>
           </div>
