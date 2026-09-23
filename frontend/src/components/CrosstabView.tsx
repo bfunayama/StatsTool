@@ -8,15 +8,18 @@ import {
 import {
   runCrosstab,
   saveCrosstabs,
+  saveFilters,
   exportXlsx,
   type BannerColumnGroup,
   type BannerSegment,
+  type Condition,
   type CrosstabColumn,
   type CrosstabGroup,
   type CrosstabNode,
   type CrosstabResponse,
   type CrosstabRowSpec,
   type DatasetMeta,
+  type Filter,
   type SavedCrosstabSpec,
 } from '../api'
 
@@ -303,6 +306,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [menu, setMenu] = useState<
     { x: number; y: number; dim: 'row' | 'col'; label: string } | null
   >(null)
+  // Right-click a data cell to create a filter from its row/column.
+  const [cellMenu, setCellMenu] = useState<
+    { x: number; y: number; ri: number; ci: number } | null
+  >(null)
+  const [notice, setNotice] = useState<string | null>(null)
   // Header multi-select (shift/cmd), inline rename, and hidden categories.
   const [selRows, setSelRows] = useState<Set<string>>(new Set())
   const [selCols, setSelCols] = useState<Set<string>>(new Set())
@@ -762,6 +770,96 @@ export function CrosstabView({ meta, onChanged }: Props) {
       else next.add(key)
       return next
     })
+  }
+
+  function cond(variable: string, values: string[]): Condition {
+    return {
+      variable,
+      operator: 'in',
+      values,
+      number: null,
+      number2: null,
+      connector: 'and',
+    }
+  }
+
+  // Build the column condition(s) for a cell's column, or null for a Total
+  // column, or a string when the column type isn't supported yet.
+  function columnConditions(col: CrosstabColumn): Condition[] | null | string {
+    const seg = col.seg ?? -1
+    if (seg < 0) {
+      // Legacy single-column path.
+      if (!colValue || colValue === TOTAL) return null
+      const grp = columnGroups.find((g) => g.label === col.label)
+      return [cond(colValue, grp ? grp.members : [col.label])]
+    }
+    const segment = bannerSegments[seg]
+    if (!segment || segment.variables.length === 0) return null // Total segment
+    const rest = (col.group ?? '').split(CATSEP)[1] ?? ''
+    if (rest === '__total__') return null
+    if (segment.variables.length === 1 || rest === '__var__') {
+      const grp = bannerGroups.find((g) => g.seg === seg && g.label === col.label)
+      return [cond(segment.variables[0], grp ? grp.members : [col.label])]
+    }
+    // Nested [parent, child]: parent from top_label, child from leaf label.
+    const grp = bannerGroups.find((g) => g.seg === seg && g.label === col.label)
+    return [
+      cond(segment.variables[0], [col.top_label ?? rest]),
+      cond(segment.variables[1], grp ? grp.members : [col.label]),
+    ]
+  }
+
+  function createFilterFromCell(ri: number, ci: number) {
+    if (!result) return
+    if (result.row_kind === 'multi') {
+      setNotice(
+        'Creating a filter from a pick-any (multi-response) row isn’t supported yet.',
+      )
+      return
+    }
+    const rowSpec = decodeRow(rowValue)
+    if (!rowSpec || rowSpec.kind !== 'variable') {
+      setNotice('Creating a filter from this row isn’t supported yet.')
+      return
+    }
+    const rowLabel = result.row_labels[ri]
+    const rowGroup = rowGroups.find((g) => g.label === rowLabel)
+    const conditions: Condition[] = [
+      cond(rowSpec.ref, rowGroup ? rowGroup.members : [rowLabel]),
+    ]
+    const col = result.columns[ci]
+    const colConds = columnConditions(col)
+    if (typeof colConds === 'string') {
+      setNotice(colConds)
+      return
+    }
+    let colName = ''
+    if (colConds) {
+      conditions.push(...colConds)
+      colName =
+        colConds.length === 2
+          ? ` · ${col.top_label} · ${col.label}`
+          : ` · ${col.label}`
+    }
+    const base = `${rowLabelFor(rowValue)}: ${rowLabel}${colName}`
+    const existing = new Set(meta.filters.map((f) => f.name))
+    let name = base
+    let n = 2
+    while (existing.has(name)) name = `${base} (${n++})`
+    const filter: Filter = {
+      id: crypto.randomUUID(),
+      name,
+      match: 'all',
+      conditions,
+    }
+    saveFilters(meta.id, [...meta.filters, filter])
+      .then((next) => {
+        onChanged(next)
+        setNotice(`Created filter “${name}”.`)
+      })
+      .catch((err) =>
+        setNotice(err instanceof Error ? err.message : 'Could not save filter.'),
+      )
   }
 
   // Per-column mean, sample variance, and (effective) n from the frequency table.
@@ -2302,6 +2400,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
                               toggleSel(cellKey)
                             }
                           }}
+                          onContextMenu={(e) => {
+                            e.preventDefault()
+                            setCellMenu({ x: e.clientX, y: e.clientY, ri, ci })
+                          }}
                         >
                           {lines.map((ln) => (
                             <span key={ln.key} className="ct-stat-line">
@@ -2403,6 +2505,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
               <>Unweighted, Total sample = {fmtCount(result.total_base)}</>
             )}
           </p>
+
+          {notice && (
+            <p className="ct-notice" onClick={() => setNotice(null)} title="Dismiss">
+              {notice}
+            </p>
+          )}
 
           {sigOn && (
             <p className="ct-sig-legend">
@@ -2588,6 +2696,21 @@ export function CrosstabView({ meta, onChanged }: Props) {
             </>
           )
         })()}
+      {cellMenu && (
+        <>
+          <div className="ct-menu-backdrop" onClick={() => setCellMenu(null)} />
+          <div className="ct-menu" style={{ left: cellMenu.x, top: cellMenu.y }}>
+            <button
+              onClick={() => {
+                createFilterFromCell(cellMenu.ri, cellMenu.ci)
+                setCellMenu(null)
+              }}
+            >
+              Create filter from this cell
+            </button>
+          </div>
+        </>
+      )}
       {advMenu &&
         (() => {
           const grp =

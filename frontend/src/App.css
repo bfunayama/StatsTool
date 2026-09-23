@@ -666,6 +666,15 @@ button.danger:hover:not(:disabled) {
   color: var(--muted, #666);
   font-style: italic;
 }
+.ct-notice {
+  margin: 0.4rem 0 0;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  cursor: pointer;
+}
 .crosstab .ct-top-head {
   text-align: center;
   border-bottom: 1px solid var(--border, #d0d0d0);
