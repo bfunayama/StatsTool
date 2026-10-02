@@ -5,11 +5,12 @@ from __future__ import annotations
 import copy
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from . import (
+    askable,
     compute,
     crosstab as crosstabbing,
     detect,
@@ -73,11 +74,21 @@ def list_datasets() -> list[DatasetSummary]:
 
 
 @app.post("/api/datasets", response_model=DatasetMeta)
-async def upload_dataset(file: UploadFile) -> DatasetMeta:
-    """Import a survey file: parse it, infer metadata, and store it."""
+async def upload_dataset(
+    file: UploadFile, source_format: str = Form("medallia")
+) -> DatasetMeta:
+    """Import a survey file: parse it, infer metadata, and store it.
+
+    ``source_format`` selects how the file is read: ``medallia`` (standard
+    one-column-per-variable) or ``askable`` (repeating block layout reshaped into
+    one variable per question).
+    """
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    if source_format == "askable":
+        return _import_askable(raw, file.filename or "uploaded.csv")
 
     try:
         df = ingest.read_table(raw)
@@ -97,6 +108,38 @@ async def upload_dataset(file: UploadFile) -> DatasetMeta:
         variables=ingest.infer_variables(df),
     )
     meta.questions = detect.detect_questions(df, meta.variables)
+    detect.apply_membership(meta.variables, meta.questions)
+    storage.create_dataset(df, meta)
+    return meta
+
+
+def _import_askable(raw: bytes, filename: str) -> DatasetMeta:
+    """Reshape an Askable block-format export and store it as a dataset."""
+    try:
+        header, body = askable.read_askable(raw)
+    except Exception as exc:  # noqa: BLE001 - surface parse errors to the user
+        raise HTTPException(
+            status_code=400, detail=f"Could not read file: {exc}"
+        ) from exc
+    if not askable.is_askable(header):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This does not look like an Askable export (no 'Block type' "
+                "columns found). Try the Medallia/standard format."
+            ),
+        )
+    df, variables, questions = askable.reshape_askable(header, body)
+    if df.empty or df.shape[1] == 0:
+        raise HTTPException(status_code=400, detail="No rows or columns found.")
+    meta = DatasetMeta(
+        id=storage.new_dataset_id(),
+        source_filename=filename,
+        n_rows=int(df.shape[0]),
+        n_cols=int(df.shape[1]),
+        variables=variables,
+    )
+    meta.questions = questions
     detect.apply_membership(meta.variables, meta.questions)
     storage.create_dataset(df, meta)
     return meta

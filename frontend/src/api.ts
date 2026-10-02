@@ -287,9 +287,15 @@ export function listDatasets(): Promise<DatasetSummary[]> {
   return fetch('/api/datasets').then(handle<DatasetSummary[]>)
 }
 
-export function uploadDataset(file: File): Promise<DatasetMeta> {
+export type SourceFormat = 'medallia' | 'askable'
+
+export function uploadDataset(
+  file: File,
+  sourceFormat: SourceFormat = 'medallia',
+): Promise<DatasetMeta> {
   const form = new FormData()
   form.append('file', file)
+  form.append('source_format', sourceFormat)
   return fetch('/api/datasets', { method: 'POST', body: form }).then(
     handle<DatasetMeta>,
   )

@@ -3,6 +3,7 @@ import {
   listDatasets,
   uploadDataset,
   type DatasetSummary,
+  type SourceFormat,
 } from '../api'
 
 interface Props {
@@ -13,6 +14,7 @@ export function DatasetImport({ onOpen }: Props) {
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [format, setFormat] = useState<SourceFormat>('medallia')
   const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -23,7 +25,7 @@ export function DatasetImport({ onOpen }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const meta = await uploadDataset(file)
+      const meta = await uploadDataset(file, format)
       onOpen(meta.id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -39,6 +41,33 @@ export function DatasetImport({ onOpen }: Props) {
         Load a .csv or tab-separated export. UTF-16 files (e.g. from Medallia)
         are handled automatically.
       </p>
+
+      <fieldset className="import-format">
+        <legend>File type</legend>
+        <label className="ct-check">
+          <input
+            type="radio"
+            name="source-format"
+            checked={format === 'medallia'}
+            onChange={() => setFormat('medallia')}
+          />
+          Medallia export
+          <span className="muted"> — standard, one column per question</span>
+        </label>
+        <label className="ct-check">
+          <input
+            type="radio"
+            name="source-format"
+            checked={format === 'askable'}
+            onChange={() => setFormat('askable')}
+          />
+          Askable export
+          <span className="muted">
+            {' '}
+            — block layout (Unmoderated or Survey), reshaped on import
+          </span>
+        </label>
+      </fieldset>
 
       <input
         ref={fileInput}
