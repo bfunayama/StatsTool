@@ -76,6 +76,19 @@ def compute_crosstab(
         mask = filtering.evaluate_filter(df, index, saved)
         df = df[mask]
 
+    # A grid question on the row axis is its own 2-D table (items × shared scale);
+    # the scale occupies the column axis, so the banner/column is ignored.
+    if request.row.kind == "question":
+        grid_q = next((q for q in meta.questions if q.id == request.row.ref), None)
+        if grid_q is not None and grid_q.kind is QuestionKind.grid:
+            weights = None
+            if request.weight:
+                wv = index.get(request.weight)
+                if wv is None:
+                    raise CrosstabError(f"Unknown weight variable: {request.weight}")
+                weights = compute.compute_weights(df, index, wv)
+            return _grid_response(df, index, grid_q, weights)
+
     # Banner columns (side-by-side segments, optionally two levels deep).
     banner, col_top, col_group, col_seg, col_full_base = _build_banner(
         df, index, request, meta.questions
@@ -140,6 +153,80 @@ def compute_crosstab(
         row_valid,
         row_kind,
         weights,
+    )
+
+
+def _grid_response(
+    df: pd.DataFrame, index, question, weights: pd.Series | None
+) -> CrosstabResponse:
+    """A grid question as a 2-D table: rows = items, columns = the shared scale.
+
+    Cell[item][scale] counts respondents who gave that scale answer for the item;
+    Row % (count / item base) is the natural reading. A per-item mean is available
+    as a summary column when the scale is numeric.
+    """
+    idx = df.index
+    weighted = weights is not None
+
+    def wsum(mask: pd.Series) -> float:
+        return float(weights[mask].sum()) if weighted else float(int(mask.sum()))
+
+    scale = list(question.categories)
+    first_member = index.get(question.items[0].column) if question.items else None
+    col_values = (
+        _row_numeric_values(first_member, scale)
+        if first_member is not None
+        else [None] * len(scale)
+    )
+
+    cells: list[list[CrosstabCell]] = []
+    row_base: list[float] = []
+    row_eff_base: list[float | None] = []
+    row_count: list[float] = []
+    answered_any = pd.Series(False, index=idx)
+    for item in question.items:
+        member = index.get(item.column)
+        series = (
+            compute.compute_display_series(df, index, member)
+            if member is not None
+            else pd.Series(pd.NA, index=idx)
+        )
+        answered = series.notna()
+        answered_any = answered_any | answered
+        cells.append([CrosstabCell(count=wsum(series == cat)) for cat in scale])
+        row_base.append(wsum(answered))
+        row_count.append(float(int(answered.sum())))
+        row_eff_base.append(
+            compute.effective_n(weights[answered]) if weighted else None
+        )
+
+    total_base = wsum(answered_any)
+    total_eff = compute.effective_n(weights[answered_any]) if weighted else None
+    # Scale columns share the grid base; Row % is the natural per-item reading.
+    columns = [
+        CrosstabColumn(
+            label=cat,
+            base=total_base,
+            eff_base=total_eff,
+            top_label="",
+            group="__all__",
+            seg=-1,
+        )
+        for cat in scale
+    ]
+    return CrosstabResponse(
+        row_labels=[it.label for it in question.items],
+        row_values=[None] * len(question.items),
+        columns=columns,
+        cells=cells,
+        total_base=total_base,
+        total_eff_base=total_eff,
+        weighted=weighted,
+        row_kind="grid",
+        row_base=row_base,
+        row_eff_base=row_eff_base,
+        row_count=row_count,
+        col_values=col_values,
     )
 
 

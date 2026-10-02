@@ -267,6 +267,29 @@ export function CrosstabView({ meta, onChanged }: Props) {
     () => (meta.questions ?? []).filter((q) => q.kind === 'multi'),
     [meta.questions],
   )
+  // Row choices in data-file order: standalone variables and Pick-any questions
+  // interleaved (a question takes the slot of its first member column).
+  const rowChoices = useMemo(() => {
+    const byColumn = new Map<string, string>()
+    for (const q of meta.questions ?? [])
+      for (const it of q.items) byColumn.set(it.column, q.id)
+    const out: { value: string; label: string }[] = []
+    const emitted = new Set<string>()
+    for (const v of meta.variables) {
+      if (v.type === 'weight') continue
+      const qid = byColumn.get(v.name)
+      if (qid) {
+        const q = (meta.questions ?? []).find((x) => x.id === qid)
+        if (q && (q.kind === 'multi' || q.kind === 'grid') && !emitted.has(q.id)) {
+          emitted.add(q.id)
+          out.push({ value: `q:${q.id}`, label: q.label })
+        }
+        continue
+      }
+      out.push({ value: `v:${v.name}`, label: v.label })
+    }
+    return out
+  }, [meta.variables, meta.questions])
 
   const [rowValue, setRowValue] = useState('')
   const [colValue, setColValue] = useState(TOTAL)
@@ -371,7 +394,16 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const advancedBanner = bannerSegments.length > 0
   const bannerKey = JSON.stringify(bannerSegments)
   const bannerGroupsKey = JSON.stringify(bannerGroups)
-  const hasColumn = advancedBanner || !!colValue
+  // A grid question on rows forms its own 2-D table (items × scale); the scale
+  // takes the column axis so the banner/column is disabled.
+  const isGridRow = (() => {
+    const row = decodeRow(rowValue)
+    if (!row || row.kind !== 'question') return false
+    return (
+      (meta.questions ?? []).find((q) => q.id === row.ref)?.kind === 'grid'
+    )
+  })()
+  const hasColumn = advancedBanner || !!colValue || isGridRow
 
   useEffect(() => {
     localStorage.setItem('statstool.ctSidebar', String(sidebarWidth))
@@ -1272,25 +1304,24 @@ export function CrosstabView({ meta, onChanged }: Props) {
     document.addEventListener('mouseup', onUp)
   }
 
-  // Swap the row and column. Only works when the row is a plain variable,
-  // because a grouped (Pick any) variable cannot sit in the column banner.
+  // Swap the row and column. Works for plain variables and the Total sample on
+  // either axis (a grouped/Pick-any row can't move to the column banner).
   const canSwap = (() => {
     const row = decodeRow(rowValue)
-    return (
-      !advancedBanner &&
-      !!colValue &&
-      colValue !== TOTAL &&
-      !!row &&
-      row.kind === 'variable'
-    )
+    if (advancedBanner || !row || !colValue) return false
+    const rowOk = row.kind === 'variable' || row.kind === 'total'
+    const rowIsVar = row.kind === 'variable'
+    const colIsVar = colValue !== TOTAL
+    // At least one side must be a real variable for the swap to mean anything.
+    return rowOk && (rowIsVar || colIsVar)
   })()
 
   function swapRowColumn() {
     const row = decodeRow(rowValue)
-    if (!row || row.kind !== 'variable' || !colValue) return
-    setRowValue(`v:${colValue}`)
-    setColValue(row.ref)
-    // The variables trade places, so their groupings follow.
+    if (!canSwap || !row) return
+    setRowValue(colValue === TOTAL ? 'total' : `v:${colValue}`)
+    setColValue(row.kind === 'total' ? TOTAL : row.ref)
+    // The variables trade places, so their groupings/overrides follow.
     setRowGroups(columnGroups)
     setColumnGroups(rowGroups)
     setRowRenames(colRenames)
@@ -1312,6 +1343,18 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setRowOrderList([])
     setSelRows(new Set())
     setAnchorRow(null)
+    // A grid row owns the column axis (its scale): clear banner, default to Row %.
+    const r = decodeRow(value)
+    const q =
+      r?.kind === 'question'
+        ? (meta.questions ?? []).find((x) => x.id === r.ref)
+        : undefined
+    if (q?.kind === 'grid') {
+      setBannerSegments([])
+      setBannerGroups([])
+      setColValue(TOTAL)
+      setCellStats(new Set<CellStat>(['row_pct']))
+    }
   }
 
   function changeColumn(value: string) {
@@ -2123,22 +2166,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <select value={rowValue} onChange={(e) => changeRow(e.target.value)}>
             <option value="">Choose a variable…</option>
             <option value="total">Total sample (no row split)</option>
-            {multiQuestions.length > 0 && (
-              <optgroup label="Grouped (Pick any)">
-                {multiQuestions.map((q) => (
-                  <option key={q.id} value={`q:${q.id}`}>
-                    {q.label}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            <optgroup label="Variables">
-              {memberless.map((v) => (
-                <option key={v.name} value={`v:${v.name}`}>
-                  {v.label}
-                </option>
-              ))}
-            </optgroup>
+            {rowChoices.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
           </select>
         </label>
         <label className="field">
@@ -2146,11 +2178,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <select
             value={colValue}
             onChange={(e) => changeColumn(e.target.value)}
-            disabled={advancedBanner}
+            disabled={advancedBanner || isGridRow}
             title={
-              advancedBanner
-                ? 'Using the banner builder below. Clear it to use a single column.'
-                : undefined
+              isGridRow
+                ? 'A grid row uses its scale as the columns.'
+                : advancedBanner
+                  ? 'Using the banner builder below. Clear it to use a single column.'
+                  : undefined
             }
           >
             <option value="">Choose a variable…</option>
@@ -2205,7 +2239,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
           Banner
           <span className="muted"> (side-by-side / nested columns)</span>
         </span>
-        {bannerSegments.length === 0 ? (
+        {isGridRow ? (
+          <span className="muted">
+            A grid row uses its scale categories as the columns.
+          </span>
+        ) : bannerSegments.length === 0 ? (
           <button
             onClick={() => {
               changeColumn('')
