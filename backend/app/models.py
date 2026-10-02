@@ -341,10 +341,11 @@ class QuestionsUpdate(BaseModel):
 
 
 class CrosstabRowSpec(BaseModel):
-    """What goes down the side of a crosstab: a variable or a grouped variable."""
+    """What goes down the side of a crosstab: a variable, a grouped variable, or
+    the whole sample as a single "Total" row."""
 
-    kind: Literal["variable", "question"]
-    ref: str  # variable name, or question id when kind == "question"
+    kind: Literal["variable", "question", "total"]
+    ref: str = ""  # variable name, or question id when kind == "question"
 
 
 class BannerSegment(BaseModel):
@@ -353,9 +354,12 @@ class BannerSegment(BaseModel):
     ``variables`` holds 0, 1, or 2 variable names: [] is a Total column, [v] is
     one variable's categories side by side, and [v1, v2] nests v2 under each of
     v1's categories (two levels). Segments sit next to each other in the banner.
+    ``question`` (when set) instead expands a pick-any question's options into
+    columns (its items side by side); ``variables`` is ignored in that case.
     """
 
     variables: list[str] = Field(default_factory=list)
+    question: str | None = None
 
 
 class BannerColumnGroup(BaseModel):

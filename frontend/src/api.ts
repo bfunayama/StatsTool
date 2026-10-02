@@ -166,7 +166,7 @@ export interface DistinctResponse {
 }
 
 export interface CrosstabRowSpec {
-  kind: 'variable' | 'question'
+  kind: 'variable' | 'question' | 'total'
   ref: string
 }
 
@@ -218,6 +218,7 @@ export interface CrosstabGroup {
 
 export interface BannerSegment {
   variables: string[]
+  question?: string
 }
 
 export interface BannerColumnGroup {

@@ -128,14 +128,17 @@ function fmtCount(value: number | null): string {
   return value === null ? '' : `${Math.round(value)}`
 }
 
-// Encode a row choice as "v:<name>" (variable) or "q:<id>" (grouped variable).
+// Encode a row choice as "v:<name>" (variable), "q:<id>" (grouped variable),
+// or "total" (the whole sample as a single row).
 function decodeRow(value: string): CrosstabRowSpec | null {
+  if (value === 'total') return { kind: 'total', ref: '' }
   if (value.startsWith('v:')) return { kind: 'variable', ref: value.slice(2) }
   if (value.startsWith('q:')) return { kind: 'question', ref: value.slice(2) }
   return null
 }
 
 function encodeRow(row: CrosstabRowSpec): string {
+  if (row.kind === 'total') return 'total'
   return `${row.kind === 'question' ? 'q' : 'v'}:${row.ref}`
 }
 
@@ -726,6 +729,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   function rowLabelFor(value: string): string {
     const row = decodeRow(value)
     if (!row) return value
+    if (row.kind === 'total') return 'Total sample'
     if (row.kind === 'question')
       return meta.questions.find((q) => q.id === row.ref)?.label ?? row.ref
     return meta.variables.find((v) => v.name === row.ref)?.label ?? row.ref
@@ -1327,6 +1331,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
         if (i !== si) return seg
         if (level === 0) {
           if (!value) return { variables: [] }
+          // A pick-any question fills the segment with its options (no nesting).
+          if (value.startsWith('q:')) return { variables: [], question: value.slice(2) }
           const nested = seg.variables[1]
           return {
             variables: nested && nested !== value ? [value, nested] : [value],
@@ -2116,6 +2122,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
           Row
           <select value={rowValue} onChange={(e) => changeRow(e.target.value)}>
             <option value="">Choose a variable…</option>
+            <option value="total">Total sample (no row split)</option>
             {multiQuestions.length > 0 && (
               <optgroup label="Grouped (Pick any)">
                 {multiQuestions.map((q) => (
@@ -2212,7 +2219,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
             {bannerSegments.map((seg, si) => (
               <span key={si} className="ct-banner-seg">
                 <select
-                  value={seg.variables[0] ?? ''}
+                  value={seg.question ? `q:${seg.question}` : seg.variables[0] ?? ''}
                   onChange={(e) => setSegmentVar(si, 0, e.target.value)}
                   title="Banner column variable"
                 >
@@ -2222,8 +2229,17 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       {v.label}
                     </option>
                   ))}
+                  {multiQuestions.length > 0 && (
+                    <optgroup label="Multi-response questions">
+                      {multiQuestions.map((q) => (
+                        <option key={q.id} value={`q:${q.id}`}>
+                          {q.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
-                {seg.variables.length >= 1 && (
+                {!seg.question && seg.variables.length >= 1 && (
                   <select
                     value={seg.variables[1] ?? ''}
                     onChange={(e) => setSegmentVar(si, 1, e.target.value)}
@@ -2798,6 +2814,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
               </>
             ) : (
               <>Unweighted, Total sample = {fmtCount(result.total_base)}</>
+            )}
+            {filterId && (
+              <>
+                , Filter:{' '}
+                {meta.filters.find((f) => f.id === filterId)?.name ?? filterId}
+              </>
             )}
           </p>
 

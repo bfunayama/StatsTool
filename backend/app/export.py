@@ -405,20 +405,27 @@ def _wrap():
 def _caption(meta: DatasetMeta, spec: SavedCrosstabSpec, result: CrosstabResponse) -> str:
     total = round(result.total_base)
     if not result.weighted:
-        return f"Unweighted, Total sample = {total}"
-    label = spec.weight or ""
-    if spec.weight:
-        var = next((v for v in meta.variables if v.name == spec.weight), None)
-        label = var.label if var else spec.weight
-    text = f"Weighted \u2013 {label}, Total sample = {total}"
-    if result.total_eff_base is not None:
-        eff = round(result.total_eff_base)
-        efficiency = (
-            result.total_eff_base / result.total_base * 100.0
-            if result.total_base
-            else 0.0
-        )
-        text += f", Effective sample = {eff}, Weighting efficiency = {efficiency:.1f}%"
+        text = f"Unweighted, Total sample = {total}"
+    else:
+        label = spec.weight or ""
+        if spec.weight:
+            var = next((v for v in meta.variables if v.name == spec.weight), None)
+            label = var.label if var else spec.weight
+        text = f"Weighted \u2013 {label}, Total sample = {total}"
+        if result.total_eff_base is not None:
+            eff = round(result.total_eff_base)
+            efficiency = (
+                result.total_eff_base / result.total_base * 100.0
+                if result.total_base
+                else 0.0
+            )
+            text += (
+                f", Effective sample = {eff}, Weighting efficiency = {efficiency:.1f}%"
+            )
+    if spec.filter_id:
+        filt = next((f for f in meta.filters if f.id == spec.filter_id), None)
+        if filt is not None:
+            text += f", Filter: {filt.name}"
     return text
 
 

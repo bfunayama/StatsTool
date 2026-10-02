@@ -77,11 +77,19 @@ def compute_crosstab(
         df = df[mask]
 
     # Banner columns (side-by-side segments, optionally two levels deep).
-    banner, col_top, col_group, col_seg = _build_banner(df, index, request)
+    banner, col_top, col_group, col_seg, col_full_base = _build_banner(
+        df, index, request, meta.questions
+    )
 
     # Rows as (label, respondent mask, numeric value|None) plus the "valid answer"
     # mask that sets every column's base (grouping never changes the base).
-    if request.row.kind == "question":
+    if request.row.kind == "total":
+        rows: list[tuple[str, pd.Series, float | None]] = [
+            ("Total", pd.Series(True, index=df.index), None)
+        ]
+        row_valid = pd.Series(True, index=df.index)
+        row_kind = "variable"
+    elif request.row.kind == "question":
         question = next((q for q in meta.questions if q.id == request.row.ref), None)
         if question is None:
             raise CrosstabError("Grouped variable not found.")
@@ -122,7 +130,16 @@ def compute_crosstab(
         weights = compute.compute_weights(df, index, weight_var)
 
     return _assemble(
-        df.index, banner, col_top, col_group, col_seg, rows, row_valid, row_kind, weights
+        df.index,
+        banner,
+        col_top,
+        col_group,
+        col_seg,
+        col_full_base,
+        rows,
+        row_valid,
+        row_kind,
+        weights,
     )
 
 
@@ -131,11 +148,16 @@ _GROUP_SEP = "\u0001"
 
 
 def _build_banner(
-    df: pd.DataFrame, index, request: CrosstabRequest
+    df: pd.DataFrame, index, request: CrosstabRequest, questions
 ) -> tuple[
-    list[tuple[str, pd.Series, float | None]], list[str], list[str], list[int]
+    list[tuple[str, pd.Series, float | None]],
+    list[str],
+    list[str],
+    list[int],
+    list[bool],
 ]:
-    """Build banner columns plus per-column top label, significance group, segment.
+    """Build banner columns plus per-column top label, sig group, segment, and a
+    "whole-sample base" flag (True for pick-any question columns).
 
     ``request.banner`` (new) supports side-by-side segments and two-level nesting;
     otherwise fall back to the single ``column`` (with column NET/merge groups).
@@ -146,6 +168,7 @@ def _build_banner(
         top: list[str] = []
         group: list[str] = []
         seg_of: list[int] = []
+        full_base: list[bool] = []
         for si, segment in enumerate(request.banner):
             # NET/merge groups defined on this segment's leaf categories.
             seg_groups = [
@@ -153,12 +176,38 @@ def _build_banner(
                 for g in request.banner_groups
                 if g.seg == si
             ]
+            if segment.question:  # pick-any question → its options become columns
+                q = next((qq for qq in questions if qq.id == segment.question), None)
+                if q is None:
+                    raise CrosstabError("Banner grouped variable not found.")
+                if q.kind is not QuestionKind.multi:
+                    raise CrosstabError(
+                        "Only Pick any grouped variables are supported on the "
+                        "column axis so far."
+                    )
+                items = []
+                for item in q.items:
+                    member = index.get(item.column)
+                    selected = (
+                        compute.compute_display_series(df, index, member).notna()
+                        if member is not None
+                        else pd.Series(False, index=idx)
+                    )
+                    items.append((item.label, selected, None))
+                for label, mask, _v in _apply_groups(items, seg_groups, idx):
+                    banner.append((label, mask, None))
+                    top.append(q.label)
+                    group.append(f"{si}{_GROUP_SEP}__var__")
+                    seg_of.append(si)
+                    full_base.append(True)
+                continue
             variables = segment.variables
             if not variables:  # Total column
                 banner.append(("Total", pd.Series(True, index=idx), None))
                 top.append("Total")
                 group.append(f"{si}{_GROUP_SEP}__total__")
                 seg_of.append(si)
+                full_base.append(False)
                 continue
             primary = index.get(variables[0])
             if primary is None:
@@ -173,6 +222,7 @@ def _build_banner(
                     top.append(primary.label)
                     group.append(f"{si}{_GROUP_SEP}__var__")
                     seg_of.append(si)
+                    full_base.append(False)
                 continue
             nested = index.get(variables[1])
             if nested is None:
@@ -187,7 +237,8 @@ def _build_banner(
                     top.append(c1)
                     group.append(f"{si}{_GROUP_SEP}{c1}")
                     seg_of.append(si)
-        return banner, top, group, seg_of
+                    full_base.append(False)
+        return banner, top, group, seg_of, full_base
 
     # Legacy single-column path (Total or one variable), with column NET/merge.
     if not request.column:
@@ -204,7 +255,8 @@ def _build_banner(
         ]
     banner = _apply_groups(banner, request.column_groups, idx)
     # Flat header (no top row) and a single comparison group across all columns.
-    return banner, [""] * len(banner), ["__all__"] * len(banner), [-1] * len(banner)
+    n = len(banner)
+    return banner, [""] * n, ["__all__"] * n, [-1] * n, [False] * n
 
 
 
@@ -253,6 +305,7 @@ def _assemble(
     col_top: list[str],
     col_group: list[str],
     col_seg: list[int],
+    col_full_base: list[bool],
     rows: list[tuple[str, pd.Series, float | None]],
     row_valid: pd.Series,
     row_kind: str,
@@ -267,10 +320,15 @@ def _assemble(
     def n_of(mask: pd.Series) -> float:
         return compute.effective_n(weights[mask]) if weighted else float(int(mask.sum()))
 
-    union = pd.Series(False, index=index)
-    for _label, mask, _value in banner:
-        union = union | mask
-    valid = union & row_valid
+    # A column's base mask: its own respondents, or the whole valid sample for
+    # pick-any (full-base) columns. ``valid`` (table base) unions these.
+    col_base_masks = [
+        (row_valid if col_full_base[ci] else (mask & row_valid))
+        for ci, (_label, mask, _value) in enumerate(banner)
+    ]
+    valid = pd.Series(False, index=index)
+    for bm in col_base_masks:
+        valid = valid | bm
 
     columns: list[CrosstabColumn] = []
     col_valids: list[pd.Series] = []
@@ -279,7 +337,7 @@ def _assemble(
         [CrosstabCell(count=0.0) for _ in banner] for _ in rows
     ]
     for ci, (label, in_col, _cv) in enumerate(banner):
-        col_valid = in_col & row_valid
+        col_valid = col_base_masks[ci]
         base = wsum(col_valid)
         eff = compute.effective_n(weights[col_valid]) if weighted else None
         columns.append(
