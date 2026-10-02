@@ -28,6 +28,7 @@ CELL_STATS = [
     ("col_pct", "Column %"),
     ("row_pct", "Row %"),
     ("total_pct", "Total %"),
+    ("correlation", "Correlation (r)"),
 ]
 SUMMARY_ROWS = [
     ("base_n", "Base n"),
@@ -71,6 +72,8 @@ def _request_from_spec(spec: SavedCrosstabSpec) -> CrosstabRequest:
         weight=spec.weight,
         row_groups=spec.row_groups,
         column_groups=spec.column_groups,
+        correlation=spec.correlation,
+        corr_with=spec.corr_with,
     )
 
 
@@ -228,6 +231,8 @@ def _render_table(
             return (
                 count / result.total_base * 100.0 if result.total_base else None
             )
+        if key == "correlation":
+            return result.cells[ri][ci].corr
         return None
 
     def summary_value(key: str, ci: int) -> float | None:
@@ -285,6 +290,8 @@ def _render_table(
 
     def stat_text(ri: int, ci: int, key: str) -> str:
         v = stat_value(ri, ci, key)
+        if key == "correlation":
+            return "–" if v is None else f"{v:.2f}"
         if v is None:
             return ""
         return f"{round(v)}" if key == "count" else f"{v:.1f}%"
@@ -348,6 +355,9 @@ def _render_table(
                     cell.value = mark or ""
                 elif key == "count":
                     cell.value = f"{round(value)} {mark}" if mark else round(value)
+                elif key == "correlation":
+                    cell.value = round(value, 2)
+                    cell.number_format = "0.00"
                 elif mark:
                     cell.value = f"{value:.1f}% {mark}"
                 else:

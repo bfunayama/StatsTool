@@ -510,7 +510,12 @@ def _validate_variables(variables: list[Variable], df: pd.DataFrame) -> None:
         raise HTTPException(status_code=400, detail="Duplicate variable names.")
 
     raw_columns = {str(c) for c in df.columns}
-    raw_names = {v.name for v in variables if v.source_name is None}
+    # Weight variables are computed (no source column), so they aren't raw imports.
+    raw_names = {
+        v.name
+        for v in variables
+        if v.source_name is None and v.type is not VariableType.weight
+    }
     if raw_names != raw_columns:
         raise HTTPException(
             status_code=400,

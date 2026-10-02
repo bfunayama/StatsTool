@@ -29,7 +29,7 @@ interface Props {
 }
 
 // Statistics the user can toggle. All are derived from cell counts + bases.
-type CellStat = 'count' | 'col_pct' | 'row_pct' | 'total_pct'
+type CellStat = 'count' | 'col_pct' | 'row_pct' | 'total_pct' | 'correlation'
 type SummaryRowStat = 'base_n' | 'eff_n' | 'total_count' | 'total_sum' | 'mean'
 type SummaryColStat = 'row_n' | 'base_n' | 'eff_n' | 'total_sum' | 'mean'
 type SigStat = 'letters' | 'arrows'
@@ -39,6 +39,7 @@ const CELL_STATS: { key: CellStat; label: string }[] = [
   { key: 'col_pct', label: 'Column %' },
   { key: 'row_pct', label: 'Row %' },
   { key: 'total_pct', label: 'Total %' },
+  { key: 'correlation', label: 'Correlation (r)' },
 ]
 const SUMMARY_ROW_STATS: { key: SummaryRowStat; label: string }[] = [
   { key: 'base_n', label: 'Base n' },
@@ -293,6 +294,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   const [rowValue, setRowValue] = useState('')
   const [colValue, setColValue] = useState(TOTAL)
+  // Correlation: the column grid question id ('' = correlate the row grid with
+  // itself). Active only when the 'correlation' cell stat is on.
+  const [corrWith, setCorrWith] = useState('')
   // Advanced banner: side-by-side segments, each 1 variable or a 2-level nest.
   // Empty = simple mode (use the single Column dropdown, with column NET/hide).
   const [bannerSegments, setBannerSegments] = useState<BannerSegment[]>([])
@@ -403,6 +407,64 @@ export function CrosstabView({ meta, onChanged }: Props) {
       (meta.questions ?? []).find((q) => q.id === row.ref)?.kind === 'grid'
     )
   })()
+  // A grid is "numeric" (usable for correlation) when ≥2 of its scale categories
+  // map to numbers (via value codes or by parsing the label).
+  function gridIsNumeric(q: { items: { column: string }[]; categories: string[] }) {
+    const first = q.items[0]
+    const v = first ? meta.variables.find((x) => x.name === first.column) : undefined
+    const coded = new Map<string, number | null>()
+    v?.values.forEach((a) => {
+      if (!a.missing) coded.set(a.label, a.value)
+    })
+    let n = 0
+    for (const cat of q.categories) {
+      const c = coded.get(cat)
+      if (c != null || !Number.isNaN(parseFloat(cat))) n += 1
+    }
+    return n >= 2
+  }
+  const numericGrids = useMemo(
+    () =>
+      (meta.questions ?? []).filter(
+        (q) => q.kind === 'grid' && gridIsNumeric(q),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meta.questions, meta.variables],
+  )
+  const rowGrid = (() => {
+    const row = decodeRow(rowValue)
+    if (!row || row.kind !== 'question') return undefined
+    return numericGrids.find((q) => q.id === row.ref)
+  })()
+  // A variable is correlatable when it is a numeric type or has ≥2 numeric codes.
+  function varIsNumeric(v?: { type: string; values: { value: number | null; label: string; missing: boolean }[] }) {
+    if (!v) return false
+    if (v.type === 'numeric') return true
+    let n = 0
+    for (const a of v.values) {
+      if (a.missing) continue
+      if (a.value != null || !Number.isNaN(parseFloat(a.label))) n += 1
+    }
+    return n >= 2
+  }
+  const rowNumericVar = (() => {
+    const row = decodeRow(rowValue)
+    if (!row || row.kind !== 'variable') return undefined
+    const v = meta.variables.find((x) => x.name === row.ref)
+    return varIsNumeric(v) ? v : undefined
+  })()
+  // Standalone numeric variables usable as a correlation operand (not grid items).
+  const numericVars = useMemo(
+    () => meta.variables.filter((v) => v.question_id == null && varIsNumeric(v)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meta.variables],
+  )
+  const canCorrelate = !!rowGrid || !!rowNumericVar
+  const correlationOn = canCorrelate && cellStats.has('correlation')
+  // Correlation's second operand (the "Correlate with" picker): a numeric
+  // variable name or a grid question id. Empty = a grid row's self-matrix.
+  const corrTarget = correlationOn ? corrWith || null : null
+  const corrNeedsColumn = correlationOn && !rowGrid && !corrTarget
   const hasColumn = advancedBanner || !!colValue || isGridRow
 
   useEffect(() => {
@@ -455,6 +517,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
       banner_parent_hidden: [...parentHidden],
       row_order: rowOrderList,
       column_order: colOrderList,
+      correlation: correlationOn,
+      corr_with: correlationOn ? corrWith || null : null,
     }
   }
 
@@ -481,6 +545,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setParentHidden(new Set(spec.banner_parent_hidden ?? []))
     setRowOrderList(spec.row_order ?? [])
     setColOrderList(spec.column_order ?? [])
+    setCorrWith(spec.corr_with ?? '')
     setSelCats(new Set())
     setSelRows(new Set())
     setSelCols(new Set())
@@ -778,6 +843,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
       setError(null)
       return
     }
+    // Correlating a numeric variable needs a column variable to pair it with.
+    if (corrNeedsColumn) {
+      setResult(null)
+      setError(null)
+      return
+    }
     let ignore = false
     setLoading(true)
     setError(null)
@@ -790,6 +861,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
       weight: weightId || null,
       rowGroups,
       columnGroups: advancedBanner ? [] : columnGroups,
+      correlation: correlationOn,
+      corrWith: corrTarget,
     })
       .then((res) => {
         if (!ignore) setResult(res)
@@ -806,7 +879,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return () => {
       ignore = true
     }
-  }, [meta.id, rowValue, colValue, bannerKey, bannerGroupsKey, filterId, weightId, rowGroups, columnGroups])
+  }, [meta.id, rowValue, colValue, bannerKey, bannerGroupsKey, filterId, weightId, rowGroups, columnGroups, correlationOn, corrWith, corrTarget, corrNeedsColumn])
 
   // A new/rebuilt table invalidates any cell selection (indices shift).
   useEffect(() => {
@@ -857,6 +930,19 @@ export function CrosstabView({ meta, onChanged }: Props) {
       else next.add(key)
       return next
     })
+  }
+
+  // Correlation is a whole-table mode: turning it on shows r alone (the scale
+  // percentages and column-n margin are meaningless against a grid axis);
+  // turning it off restores the grid default (Row %).
+  function toggleCorrelation() {
+    if (cellStats.has('correlation')) {
+      setCellStats(new Set<CellStat>([rowGrid ? 'row_pct' : 'col_pct']))
+      setSummaryRows(new Set<SummaryRowStat>(['total_count']))
+    } else {
+      setCellStats(new Set<CellStat>(['correlation']))
+      setSummaryRows(new Set<SummaryRowStat>())
+    }
   }
 
   // ⌘/Ctrl+click a cell (category or Mean) to add/remove it from the test pair.
@@ -1089,7 +1175,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
   }
 
   // Ordered list of cell-stat lines to render inside one cell.
-  function cellLines(count: number, colBase: number, rowTotal: number) {
+  function cellLines(
+    count: number,
+    colBase: number,
+    rowTotal: number,
+    corr?: number | null,
+  ) {
     const lines: { key: CellStat; label: string; text: string }[] = []
     for (const stat of CELL_STATS) {
       if (!cellStats.has(stat.key)) continue
@@ -1105,6 +1196,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
             ? (count / result.total_base) * 100
             : null,
         )
+      else if (stat.key === 'correlation')
+        text = corr == null ? '–' : corr.toFixed(2)
       lines.push({ key: stat.key, label: stat.label, text })
     }
     return lines
@@ -1343,6 +1436,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setRowOrderList([])
     setSelRows(new Set())
     setAnchorRow(null)
+    setCorrWith('')
     // A grid row owns the column axis (its scale): clear banner, default to Row %.
     const r = decodeRow(value)
     const q =
@@ -2178,13 +2272,15 @@ export function CrosstabView({ meta, onChanged }: Props) {
           <select
             value={colValue}
             onChange={(e) => changeColumn(e.target.value)}
-            disabled={advancedBanner || isGridRow}
+            disabled={advancedBanner || isGridRow || correlationOn}
             title={
-              isGridRow
-                ? 'A grid row uses its scale as the columns.'
-                : advancedBanner
-                  ? 'Using the banner builder below. Clear it to use a single column.'
-                  : undefined
+              correlationOn
+                ? 'Correlation uses the “Correlate with” picker below.'
+                : isGridRow
+                  ? 'A grid row uses its scale as the columns.'
+                  : advancedBanner
+                    ? 'Using the banner builder below. Clear it to use a single column.'
+                    : undefined
             }
           >
             <option value="">Choose a variable…</option>
@@ -2328,16 +2424,65 @@ export function CrosstabView({ meta, onChanged }: Props) {
       <div className="ct-stat-groups">
         <fieldset className="ct-stat-group">
           <legend>Cell statistics</legend>
-          {CELL_STATS.map((s) => (
-            <label key={s.key} className="ct-check">
-              <input
-                type="checkbox"
-                checked={cellStats.has(s.key)}
-                onChange={() => toggle(setCellStats, s.key)}
-              />
-              {s.label}
+          {CELL_STATS.map((s) => {
+            const disabled = s.key === 'correlation' && !canCorrelate
+            return (
+              <label
+                key={s.key}
+                className={disabled ? 'ct-check ct-check-disabled' : 'ct-check'}
+                title={
+                  disabled
+                    ? 'Put a numeric variable or grid question on the Row to enable correlation.'
+                    : undefined
+                }
+              >
+                <input
+                  type="checkbox"
+                  disabled={disabled}
+                  checked={!disabled && cellStats.has(s.key)}
+                  onChange={() =>
+                    s.key === 'correlation'
+                      ? toggleCorrelation()
+                      : toggle(setCellStats, s.key)
+                  }
+                />
+                {s.label}
+              </label>
+            )
+          })}
+          {correlationOn && (
+            <label className="ct-check ct-corr-with">
+              Correlate with
+              <select
+                value={corrWith}
+                onChange={(e) => setCorrWith(e.target.value)}
+              >
+                {rowGrid ? (
+                  <option value="">{rowGrid.label} (self)</option>
+                ) : (
+                  <option value="">Choose a variable or grid…</option>
+                )}
+                <optgroup label="Numeric variables">
+                  {numericVars
+                    .filter((v) => v.name !== rowNumericVar?.name)
+                    .map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.label}
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="Grid questions">
+                  {numericGrids
+                    .filter((q) => q.id !== rowGrid?.id)
+                    .map((q) => (
+                      <option key={q.id} value={q.id}>
+                        {q.label}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
             </label>
-          ))}
+          )}
         </fieldset>
         <fieldset className="ct-stat-group">
           <legend>Summary row</legend>
@@ -2732,6 +2877,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                         cell.count,
                         result.columns[ci].base,
                         margins.rowTotals[ri],
+                        cell.corr,
                       )
                       const arrow = arrowsOn ? cell.sig_arrow : null
                       const beats =

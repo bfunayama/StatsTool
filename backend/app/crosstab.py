@@ -76,6 +76,11 @@ def compute_crosstab(
         mask = filtering.evaluate_filter(df, index, saved)
         df = df[mask]
 
+    # Correlation mode: Pearson r between two numeric operands (each a single
+    # numeric variable or a grid question's items), using a pairwise base.
+    if request.correlation:
+        return _correlation_response(df, index, meta, request)
+
     # A grid question on the row axis is its own 2-D table (items × shared scale);
     # the scale occupies the column axis, so the banner/column is ignored.
     if request.row.kind == "question":
@@ -227,6 +232,144 @@ def _grid_response(
         row_eff_base=row_eff_base,
         row_count=row_count,
         col_values=col_values,
+    )
+
+
+def _grid_numeric_series(
+    df: pd.DataFrame, index, question
+) -> tuple[list[pd.Series], list[str]]:
+    """Each grid item as a numeric series (scale label → code), plus its label."""
+    vals = None
+    if question.items:
+        first = index.get(question.items[0].column)
+        vals = _row_numeric_values(first, question.categories) if first else None
+    mapping = (
+        {cat: v for cat, v in zip(question.categories, vals) if v is not None}
+        if vals
+        else {}
+    )
+    series: list[pd.Series] = []
+    labels: list[str] = []
+    for item in question.items:
+        member = index.get(item.column)
+        if member is None:
+            series.append(pd.Series(float("nan"), index=df.index))
+        else:
+            s = compute.compute_display_series(df, index, member)
+            num = s.map(mapping) if mapping else s
+            series.append(pd.to_numeric(num, errors="coerce"))
+        labels.append(item.label)
+    return series, labels
+
+
+def _variable_numeric_series(df: pd.DataFrame, index, var: Variable) -> pd.Series:
+    """A single variable's display values as numbers (value codes, else parsed)."""
+    coded = {
+        v.label: v.value
+        for v in var.values
+        if not v.missing and v.value is not None
+    }
+    s = compute.compute_display_series(df, index, var)
+    num = s.map(coded) if coded else s
+    return pd.to_numeric(num, errors="coerce")
+
+
+def _corr_operand(
+    df: pd.DataFrame, index, meta: DatasetMeta, kind: str, ref: str
+) -> tuple[list[pd.Series], list[str]]:
+    """Resolve one side of a correlation into numeric series + their labels."""
+    if kind == "question":
+        q = next((x for x in meta.questions if x.id == ref), None)
+        if q is None or q.kind is not QuestionKind.grid:
+            raise CrosstabError("Correlation needs a numeric grid question.")
+        return _grid_numeric_series(df, index, q)
+    var = index.get(ref)
+    if var is None:
+        raise CrosstabError(f"Correlation variable not found: {ref}")
+    return [_variable_numeric_series(df, index, var)], [var.label]
+
+
+def _resolve_corr_target(meta: DatasetMeta, request: CrosstabRequest) -> tuple[str, str]:
+    """Pick the column operand: an explicit corr_with, else a grid's self-matrix."""
+    target = request.corr_with
+    if not target:
+        if request.row.kind == "question":
+            return "question", request.row.ref
+        raise CrosstabError("Choose a column variable to correlate with.")
+    if any(q.id == target for q in meta.questions):
+        return "question", target
+    if any(v.name == target for v in meta.variables):
+        return "variable", target
+    raise CrosstabError("Correlation target not found.")
+
+
+def _pearson(x, y) -> float | None:
+    """Pearson correlation of two aligned numeric arrays (None if undefined)."""
+    import numpy as np
+
+    if len(x) < 2:
+        return None
+    xd = x - x.mean()
+    yd = y - y.mean()
+    denom = float(np.sqrt(float((xd * xd).sum()) * float((yd * yd).sum())))
+    if denom == 0.0:
+        return None
+    return float((xd * yd).sum() / denom)
+
+
+def _correlation_response(
+    df: pd.DataFrame, index, meta: DatasetMeta, request: CrosstabRequest
+) -> CrosstabResponse:
+    """Pearson r matrix between two numeric operands (grid items or variables).
+
+    Each operand is a grid question (its items) or a single numeric variable.
+    Unweighted (v1). r is None where fewer than two respondents answered both
+    series or a series has no variance.
+    """
+    row_series, row_labels = _corr_operand(
+        df, index, meta, request.row.kind, request.row.ref
+    )
+    col_kind, col_ref = _resolve_corr_target(meta, request)
+    col_series, col_labels = _corr_operand(df, index, meta, col_kind, col_ref)
+
+    cells: list[list[CrosstabCell]] = []
+    for rs in row_series:
+        row_cells: list[CrosstabCell] = []
+        for cs in col_series:
+            both = rs.notna() & cs.notna()
+            n = int(both.sum())
+            r = (
+                _pearson(rs[both].to_numpy(float), cs[both].to_numpy(float))
+                if n >= 2
+                else None
+            )
+            row_cells.append(CrosstabCell(count=float(n), corr=r))
+        cells.append(row_cells)
+
+    columns = [
+        CrosstabColumn(
+            label=lbl,
+            base=float(int(cs.notna().sum())),
+            top_label="",
+            group="__all__",
+            seg=-1,
+        )
+        for lbl, cs in zip(col_labels, col_series)
+    ]
+    row_base = [float(int(rs.notna().sum())) for rs in row_series]
+    return CrosstabResponse(
+        row_labels=row_labels,
+        row_values=[None] * len(row_labels),
+        columns=columns,
+        cells=cells,
+        total_base=float(len(df)),
+        total_eff_base=None,
+        weighted=False,
+        row_kind="variable",
+        row_base=row_base,
+        row_eff_base=[None] * len(row_labels),
+        row_count=row_base,
+        col_values=[None] * len(col_labels),
     )
 
 

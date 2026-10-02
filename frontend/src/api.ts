@@ -172,8 +172,7 @@ export interface CrosstabRowSpec {
 
 export interface CrosstabCell {
   count: number
-  column_pct: number | null
-  sig_higher?: string[]
+  column_pct: number | null  corr?: number | null  sig_higher?: string[]
   sig_arrow?: 'up' | 'down' | null
 }
 
@@ -249,6 +248,8 @@ export interface SavedCrosstabSpec {
   banner_parent_hidden?: string[]
   row_order?: string[]
   column_order?: string[]
+  correlation?: boolean
+  corr_with?: string | null
 }
 
 export interface CrosstabNode {
@@ -361,6 +362,8 @@ export function runCrosstab(
     weight?: string | null
     rowGroups?: CrosstabGroup[]
     columnGroups?: CrosstabGroup[]
+    correlation?: boolean
+    corrWith?: string | null
   },
 ): Promise<CrosstabResponse> {
   return postJson(`/api/datasets/${id}/crosstab`, {
@@ -372,6 +375,8 @@ export function runCrosstab(
     weight: req.weight ?? null,
     row_groups: req.rowGroups ?? [],
     column_groups: req.columnGroups ?? [],
+    correlation: req.correlation ?? false,
+    corr_with: req.corrWith ?? null,
   })
 }
 

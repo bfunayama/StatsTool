@@ -402,6 +402,9 @@ class CrosstabRequest(BaseModel):
     weight: str | None = None  # optional weight-variable name
     row_groups: list[CrosstabGroup] = Field(default_factory=list)
     column_groups: list[CrosstabGroup] = Field(default_factory=list)
+    # Correlation mode: Pearson r matrix between two grid questions' items.
+    correlation: bool = False
+    corr_with: str | None = None  # column grid question id (None = same as row)
 
 
 class CrosstabCell(BaseModel):
@@ -409,6 +412,7 @@ class CrosstabCell(BaseModel):
 
     count: float
     column_pct: float | None = None  # count / column base, as a percentage
+    corr: float | None = None  # Pearson r (correlation tables only)
     # Significance testing (column proportions, 95%):
     sig_higher: list[str] = Field(default_factory=list)  # letters of columns beaten
     sig_arrow: Literal["up", "down"] | None = None  # vs. rest of the sample
@@ -480,6 +484,9 @@ class SavedCrosstabSpec(BaseModel):
     # natural order). Columns reorder within their banner parent/segment.
     row_order: list[str] = Field(default_factory=list)
     column_order: list[str] = Field(default_factory=list)
+    # Correlation mode (grid r-matrix).
+    correlation: bool = False
+    corr_with: str | None = None
 
 
 class CrosstabNode(BaseModel):
