@@ -139,6 +139,15 @@ select {
 .crosstab .ct-stat-line {
   display: block;
 }
+.crosstab .ct-corr-sig {
+  font-weight: 700;
+}
+.crosstab .ct-corr-pos {
+  color: #1a7f37;
+}
+.crosstab .ct-corr-neg {
+  color: #c1121f;
+}
 .crosstab .ct-sig-line {
   display: block;
   font-size: 0.72rem;

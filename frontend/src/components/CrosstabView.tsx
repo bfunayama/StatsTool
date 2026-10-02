@@ -2901,7 +2901,18 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           }}
                         >
                           {lines.map((ln) => (
-                            <span key={ln.key} className="ct-stat-line">
+                            <span
+                              key={ln.key}
+                              className={
+                                ln.key === 'correlation' && cell.corr_sig
+                                  ? `ct-stat-line ct-corr-sig ${
+                                      (cell.corr ?? 0) < 0
+                                        ? 'ct-corr-neg'
+                                        : 'ct-corr-pos'
+                                    }`
+                                  : 'ct-stat-line'
+                              }
+                            >
                               {ln.text}
                             </span>
                           ))}

@@ -303,18 +303,43 @@ def _resolve_corr_target(meta: DatasetMeta, request: CrosstabRequest) -> tuple[s
     raise CrosstabError("Correlation target not found.")
 
 
-def _pearson(x, y) -> float | None:
-    """Pearson correlation of two aligned numeric arrays (None if undefined)."""
+def _pearson(x, y, w=None) -> float | None:
+    """Pearson correlation of two aligned arrays, optionally weighted.
+
+    Returns None when undefined (fewer than two points, or a flat series).
+    """
     import numpy as np
 
     if len(x) < 2:
         return None
-    xd = x - x.mean()
-    yd = y - y.mean()
-    denom = float(np.sqrt(float((xd * xd).sum()) * float((yd * yd).sum())))
+    if w is None:
+        xd = x - x.mean()
+        yd = y - y.mean()
+        denom = float(np.sqrt(float((xd * xd).sum()) * float((yd * yd).sum())))
+        if denom == 0.0:
+            return None
+        return float((xd * yd).sum() / denom)
+    sw = float(w.sum())
+    if sw <= 0.0:
+        return None
+    mx = float((w * x).sum() / sw)
+    my = float((w * y).sum() / sw)
+    xd = x - mx
+    yd = y - my
+    denom = float(np.sqrt(float((w * xd * xd).sum()) * float((w * yd * yd).sum())))
     if denom == 0.0:
         return None
-    return float((xd * yd).sum() / denom)
+    return float((w * xd * yd).sum() / denom)
+
+
+def _corr_significant(r: float | None, n: int) -> bool:
+    """Whether a Pearson r differs from 0 at 95% (two-tailed t-test, df = n-2)."""
+    if r is None or n < 3:
+        return False
+    if abs(r) >= 1.0:
+        return True
+    t = abs(r) * math.sqrt((n - 2) / (1.0 - r * r))
+    return t > 1.96  # ~95% two-tailed critical value for survey-sized n
 
 
 def _correlation_response(
@@ -323,27 +348,41 @@ def _correlation_response(
     """Pearson r matrix between two numeric operands (grid items or variables).
 
     Each operand is a grid question (its items) or a single numeric variable.
-    Unweighted (v1). r is None where fewer than two respondents answered both
-    series or a series has no variance.
+    Weighted when a weight variable is supplied. r is None where fewer than two
+    respondents answered both series or a series has no variance. Significance is
+    a two-tailed t-test that r differs from 0 at 95% (the trivial self-diagonal
+    is left unflagged).
     """
     row_series, row_labels = _corr_operand(
         df, index, meta, request.row.kind, request.row.ref
     )
     col_kind, col_ref = _resolve_corr_target(meta, request)
     col_series, col_labels = _corr_operand(df, index, meta, col_kind, col_ref)
+    # Self-matrix: same operand on both axes, so its diagonal is a trivial r = 1.
+    is_self = col_kind == request.row.kind and col_ref == request.row.ref
+
+    weights = None
+    if request.weight:
+        wv = index.get(request.weight)
+        if wv is None:
+            raise CrosstabError(f"Unknown weight variable: {request.weight}")
+        weights = compute.compute_weights(df, index, wv)
 
     cells: list[list[CrosstabCell]] = []
-    for rs in row_series:
+    for i, rs in enumerate(row_series):
         row_cells: list[CrosstabCell] = []
-        for cs in col_series:
+        for j, cs in enumerate(col_series):
             both = rs.notna() & cs.notna()
             n = int(both.sum())
+            w = weights[both].to_numpy(float) if weights is not None else None
             r = (
-                _pearson(rs[both].to_numpy(float), cs[both].to_numpy(float))
+                _pearson(rs[both].to_numpy(float), cs[both].to_numpy(float), w)
                 if n >= 2
                 else None
             )
-            row_cells.append(CrosstabCell(count=float(n), corr=r))
+            diagonal = is_self and i == j
+            sig = False if diagonal else _corr_significant(r, n)
+            row_cells.append(CrosstabCell(count=float(n), corr=r, corr_sig=sig))
         cells.append(row_cells)
 
     columns = [
@@ -364,7 +403,7 @@ def _correlation_response(
         cells=cells,
         total_base=float(len(df)),
         total_eff_base=None,
-        weighted=False,
+        weighted=weights is not None,
         row_kind="variable",
         row_base=row_base,
         row_eff_base=[None] * len(row_labels),

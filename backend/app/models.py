@@ -413,6 +413,7 @@ class CrosstabCell(BaseModel):
     count: float
     column_pct: float | None = None  # count / column base, as a percentage
     corr: float | None = None  # Pearson r (correlation tables only)
+    corr_sig: bool | None = None  # r differs from 0 at 95% (correlation tables)
     # Significance testing (column proportions, 95%):
     sig_higher: list[str] = Field(default_factory=list)  # letters of columns beaten
     sig_arrow: Literal["up", "down"] | None = None  # vs. rest of the sample
