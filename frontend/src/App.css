@@ -124,12 +124,20 @@ select {
 .crosstab .ct-rowhead {
   text-align: left;
   font-weight: 500;
+  cursor: pointer;
 }
 .crosstab .ct-colhead {
   font-weight: 600;
+  cursor: pointer;
+}
+.crosstab .ct-rowhead.ct-summary,
+.crosstab .ct-colhead.ct-summary-head {
+  cursor: default;
 }
 .crosstab .ct-cell {
   line-height: 1.25;
+  cursor: pointer;
+  user-select: none;
 }
 .crosstab .ct-cell-selected {
   outline: 2px solid var(--accent);
@@ -326,6 +334,13 @@ select {
 }
 .ct-menu button:hover {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ct-menu button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.ct-menu button:disabled:hover {
+  background: none;
 }
 .ct-groups-panel {
   display: flex;

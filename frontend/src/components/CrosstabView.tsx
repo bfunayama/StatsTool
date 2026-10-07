@@ -344,16 +344,17 @@ export function CrosstabView({ meta, onChanged }: Props) {
   const [menu, setMenu] = useState<
     { x: number; y: number; dim: 'row' | 'col'; label: string } | null
   >(null)
-  // Right-click a data cell to create a filter from its row/column.
-  const [cellMenu, setCellMenu] = useState<
-    { x: number; y: number; ri: number; ci: number } | null
-  >(null)
+  // Right-click a data cell to act on the current cell selection.
+  const [cellMenu, setCellMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  )
   const [notice, setNotice] = useState<string | null>(null)
   // Header multi-select (shift/cmd), inline rename, and hidden categories.
   const [selRows, setSelRows] = useState<Set<string>>(new Set())
   const [selCols, setSelCols] = useState<Set<string>>(new Set())
-  // Individual cell selection (⌘/Ctrl+click) for manual pairwise sig tests.
+  // Cell selection: click, shift-click (rectangle), ⌘/Ctrl-click (toggle).
   const [selCells, setSelCells] = useState<Set<string>>(new Set())
+  const [cellAnchor, setCellAnchor] = useState<string | null>(null)
   const [sigTest, setSigTest] = useState<SigTestResult | null>(null)
   const [anchorRow, setAnchorRow] = useState<string | null>(null)
   const [anchorCol, setAnchorCol] = useState<string | null>(null)
@@ -884,7 +885,43 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // A new/rebuilt table invalidates any cell selection (indices shift).
   useEffect(() => {
     setSelCells(new Set())
+    setCellAnchor(null)
   }, [result])
+  // Escape clears the cell selection and closes any open cell menu.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setSelCells(new Set())
+        setCellAnchor(null)
+        setCellMenu(null)
+        setSelRows(new Set())
+        setSelCols(new Set())
+        setSelCats(new Set())
+        setAnchorRow(null)
+        setAnchorCol(null)
+        setMenu(null)
+        setAdvMenu(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  // Clicking outside the table (and not on a context menu) clears the selection.
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as HTMLElement | null
+      if (!t || t.closest('table.crosstab') || t.closest('.ct-menu')) return
+      setSelCells(new Set())
+      setCellAnchor(null)
+      setSelRows(new Set())
+      setSelCols(new Set())
+      setSelCats(new Set())
+      setAnchorRow(null)
+      setAnchorCol(null)
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  }, [])
   // Row/column totals derived from cell counts (used for row %, total %, margins).
   const margins = useMemo(() => {
     if (!result) return null
@@ -945,16 +982,6 @@ export function CrosstabView({ meta, onChanged }: Props) {
     }
   }
 
-  // ⌘/Ctrl+click a cell (category or Mean) to add/remove it from the test pair.
-  function toggleSel(key: string) {
-    setSelCells((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-
   function cond(variable: string, values: string[]): Condition {
     return {
       variable,
@@ -992,43 +1019,175 @@ export function CrosstabView({ meta, onChanged }: Props) {
     ]
   }
 
-  function createFilterFromCell(ri: number, ci: number) {
-    if (!result) return
+  // Cells selected between two body cells, as a rectangle in display order.
+  function cellRangeBlock(aKey: string, bKey: string): string[] {
+    const [ar, ac] = aKey.split(':').map(Number)
+    const [br, bc] = bKey.split(':').map(Number)
+    const rp0 = visRowIdx.indexOf(ar)
+    const rp1 = visRowIdx.indexOf(br)
+    const cp0 = visColIdx.indexOf(ac)
+    const cp1 = visColIdx.indexOf(bc)
+    if (rp0 < 0 || rp1 < 0 || cp0 < 0 || cp1 < 0) return [bKey]
+    const [rlo, rhi] = rp0 < rp1 ? [rp0, rp1] : [rp1, rp0]
+    const [clo, chi] = cp0 < cp1 ? [cp0, cp1] : [cp1, cp0]
+    const out: string[] = []
+    for (let r = rlo; r <= rhi; r++)
+      for (let c = clo; c <= chi; c++)
+        out.push(`${visRowIdx[r]}:${visColIdx[c]}`)
+    return out
+  }
+
+  // Keep only one kind of selection active at a time (row/col headers, cells,
+  // or banner sub-columns), so they never overlap.
+  function keepOnly(kind: 'row' | 'col' | 'cell' | 'cat') {
+    if (kind !== 'cell') {
+      setSelCells(new Set())
+      setCellAnchor(null)
+    }
+    if (kind !== 'cat') setSelCats(new Set())
+    if (kind !== 'row') {
+      setSelRows(new Set())
+      setAnchorRow(null)
+    }
+    if (kind !== 'col') {
+      setSelCols(new Set())
+      setAnchorCol(null)
+    }
+  }
+
+  function selectBodyCell(ri: number, ci: number, e: ReactMouseEvent) {
+    const key = `${ri}:${ci}`
+    if (e.shiftKey && cellAnchor && !cellAnchor.startsWith('mean:')) {
+      setSelCells(new Set(cellRangeBlock(cellAnchor, key)))
+    } else if (e.metaKey || e.ctrlKey) {
+      const next = new Set(selCells)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      setSelCells(next)
+      setCellAnchor(key)
+    } else {
+      setSelCells(new Set([key]))
+      setCellAnchor(key)
+    }
+    keepOnly('cell')
+  }
+
+  // Mean summary cells are selectable individually (for the two-mean sig test).
+  function selectMeanCell(ci: number, e: ReactMouseEvent) {
+    const key = `mean:${ci}`
+    if (e.metaKey || e.ctrlKey) {
+      const next = new Set(selCells)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      setSelCells(next)
+      setCellAnchor(key)
+    } else {
+      setSelCells(new Set([key]))
+      setCellAnchor(key)
+    }
+    keepOnly('cell')
+  }
+
+  // Right-click: a cell outside the selection becomes the whole selection.
+  function openCellMenu(ri: number, ci: number, e: ReactMouseEvent) {
+    e.preventDefault()
+    const key = `${ri}:${ci}`
+    if (!selCells.has(key)) {
+      setSelCells(new Set([key]))
+      setCellAnchor(key)
+      keepOnly('cell')
+    }
+    setCellMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  function openMeanMenu(ci: number, e: ReactMouseEvent) {
+    e.preventDefault()
+    const key = `mean:${ci}`
+    if (!selCells.has(key)) {
+      setSelCells(new Set([key]))
+      setCellAnchor(key)
+      keepOnly('cell')
+    }
+    setCellMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  // Conditions describing one body cell (row category AND column), or an error.
+  function cellConditionsFor(
+    ri: number,
+    ci: number,
+  ): { conds: Condition[]; label: string } | string {
+    if (!result) return 'No table.'
+    if (result.row_kind === 'grid') {
+      const rowSpec = decodeRow(rowValue)
+      const q = (meta.questions ?? []).find((x) => x.id === rowSpec?.ref)
+      const item = q?.items[ri]
+      if (!item) return 'Cannot build a filter for this grid cell.'
+      const scale = result.columns[ci].label
+      return {
+        conds: [cond(item.column, [scale])],
+        label: `${item.label}: ${scale}`,
+      }
+    }
     if (result.row_kind === 'multi') {
-      setNotice(
-        'Creating a filter from a pick-any (multi-response) row isn’t supported yet.',
-      )
-      return
+      return 'Creating a filter from a pick-any (multi-response) row isn’t supported yet.'
     }
     const rowSpec = decodeRow(rowValue)
     if (!rowSpec || rowSpec.kind !== 'variable') {
-      setNotice('Creating a filter from this row isn’t supported yet.')
-      return
+      return 'Creating a filter from this row isn’t supported yet.'
     }
     const rowLabel = result.row_labels[ri]
     const rowGroup = rowGroups.find((g) => g.label === rowLabel)
-    const conditions: Condition[] = [
+    const conds: Condition[] = [
       cond(rowSpec.ref, rowGroup ? rowGroup.members : [rowLabel]),
     ]
     const col = result.columns[ci]
     const colConds = columnConditions(col)
-    if (typeof colConds === 'string') {
-      setNotice(colConds)
-      return
-    }
+    if (typeof colConds === 'string') return colConds
     let colName = ''
     if (colConds) {
-      conditions.push(...colConds)
+      conds.push(...colConds)
       colName =
         colConds.length === 2
           ? ` · ${col.top_label} · ${col.label}`
           : ` · ${col.label}`
     }
-    const base = `${rowLabelFor(rowValue)}: ${rowLabel}${colName}`
+    return { conds, label: `${rowLabelFor(rowValue)}: ${rowLabel}${colName}` }
+  }
+
+  // OR together the selected body cells (AND within each cell) into one filter.
+  function createFilterFromSelection() {
+    if (!result) return
+    const bodyCells = [...selCells]
+      .filter((k) => !k.startsWith('mean:'))
+      .map((k) => k.split(':').map(Number) as [number, number])
+    if (bodyCells.length === 0) {
+      setNotice('Select one or more data cells first.')
+      return
+    }
+    const perCell: { conds: Condition[]; label: string }[] = []
+    for (const [ri, ci] of bodyCells) {
+      const built = cellConditionsFor(ri, ci)
+      if (typeof built === 'string') {
+        setNotice(built)
+        return
+      }
+      perCell.push(built)
+    }
+    const conditions: Condition[] = []
+    perCell.forEach((pc, idx) => {
+      pc.conds.forEach((c, k) => {
+        conditions.push({ ...c, connector: idx > 0 && k === 0 ? 'or' : 'and' })
+      })
+    })
+    const base =
+      perCell.length === 1
+        ? perCell[0].label
+        : `${perCell.length} cells: ${perCell.map((p) => p.label).join(' OR ')}`
+    const trimmed = base.length > 80 ? `${base.slice(0, 77)}…` : base
     const existing = new Set(meta.filters.map((f) => f.name))
-    let name = base
+    let name = trimmed
     let n = 2
-    while (existing.has(name)) name = `${base} (${n++})`
+    while (existing.has(name)) name = `${trimmed} (${n++})`
     const filter: Filter = {
       id: crypto.randomUUID(),
       name,
@@ -1043,6 +1202,60 @@ export function CrosstabView({ meta, onChanged }: Props) {
       .catch((err) =>
         setNotice(err instanceof Error ? err.message : 'Could not save filter.'),
       )
+  }
+
+  // Combined display text of one selected cell (body or mean), for copying.
+  function cellTextAt(key: string): string {
+    if (!result || !margins) return ''
+    if (key.startsWith('mean:')) {
+      const ci = Number(key.slice(5))
+      return summaryRowValue('mean', ci)
+    }
+    const [ri, ci] = key.split(':').map(Number)
+    const cell = result.cells[ri]?.[ci]
+    if (!cell) return ''
+    return cellLines(
+      cell.count,
+      result.columns[ci].base,
+      margins.rowTotals[ri],
+      cell.corr,
+    )
+      .map((l) => l.text)
+      .join(' / ')
+  }
+
+  // Copy selected values: a rectangle as a tab/newline grid, else a list.
+  function copyCells() {
+    const keys = [...selCells]
+    if (keys.length === 0) return
+    const body = keys
+      .filter((k) => !k.startsWith('mean:'))
+      .map((k) => k.split(':').map(Number) as [number, number])
+    let text: string
+    if (body.length) {
+      const rows = [...new Set(body.map(([r]) => r))].sort(
+        (a, b) => visRowIdx.indexOf(a) - visRowIdx.indexOf(b),
+      )
+      const cols = [...new Set(body.map(([, c]) => c))].sort(
+        (a, b) => visColIdx.indexOf(a) - visColIdx.indexOf(b),
+      )
+      const picked = new Set(body.map(([r, c]) => `${r}:${c}`))
+      text = rows
+        .map((r) =>
+          cols
+            .map((c) => (picked.has(`${r}:${c}`) ? cellTextAt(`${r}:${c}`) : ''))
+            .join('\t'),
+        )
+        .join('\n')
+    } else {
+      text = keys.map((k) => cellTextAt(k)).join('\n')
+    }
+    navigator.clipboard
+      .writeText(text)
+      .then(() =>
+        setNotice(`Copied ${keys.length} cell${keys.length === 1 ? '' : 's'}.`),
+      )
+      .catch(() => setNotice('Could not copy to the clipboard.'))
   }
 
   // Per-column mean, sample variance, and (effective) n from the frequency table.
@@ -1501,6 +1714,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   }
 
   function toggleCat(key: string, additive: boolean) {
+    keepOnly('cat')
     setSelCats((prev) => {
       const next = additive ? new Set(prev) : new Set<string>()
       if (prev.has(key) && additive) next.delete(key)
@@ -1892,6 +2106,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
       setSel(new Set([label]))
       setAnchor(label)
     }
+    keepOnly(dim)
   }
 
   function clearSel(dim: 'row' | 'col') {
@@ -1927,6 +2142,47 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   function netSelected(dim: 'row' | 'col') {
     createGroupFromMembers(dim, [...(dim === 'row' ? selRows : selCols)], 'net')
+  }
+
+  // Hide every selected header at once, then drop the selection.
+  function hideSelected(dim: 'row' | 'col') {
+    const sel = dim === 'row' ? selRows : selCols
+    if (dim === 'row') setRowHidden(new Set([...rowHidden, ...sel]))
+    else setColHidden(new Set([...colHidden, ...sel]))
+    clearSel(dim)
+  }
+
+  // Right-click a header: if it isn't in the selection, select just it first.
+  function openHeaderMenu(dim: 'row' | 'col', label: string, e: ReactMouseEvent) {
+    e.preventDefault()
+    const sel = dim === 'row' ? selRows : selCols
+    if (!sel.has(label)) {
+      if (dim === 'row') {
+        setSelRows(new Set([label]))
+        setAnchorRow(label)
+      } else {
+        setSelCols(new Set([label]))
+        setAnchorCol(label)
+      }
+    }
+    keepOnly(dim)
+    setMenu({ x: e.clientX, y: e.clientY, dim, label })
+  }
+
+  // Right-click a banner sub-column: select it first if it isn't already.
+  function openLeafMenu(c: CrosstabColumn, e: ReactMouseEvent) {
+    e.preventDefault()
+    const key = catKey(c)
+    if (!selCats.has(key)) setSelCats(new Set([key]))
+    keepOnly('cat')
+    setAdvMenu({
+      x: e.clientX,
+      y: e.clientY,
+      kind: 'leaf',
+      seg: c.seg ?? -1,
+      label: c.label,
+      group: c.group ?? '',
+    })
   }
 
   function startHeaderEdit(dim: 'row' | 'col', label: string) {
@@ -2562,65 +2818,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
             significance test between them (two percentages, or two Mean cells).
           </p>
           {(selRows.size >= 2 || selCols.size >= 2) && (
-            <div className="ct-select-bar">
-              {selRows.size >= 2 && (
-                <span className="ct-select-group">
-                  <span className="muted">{selRows.size} rows selected</span>
-                  <button onClick={() => mergeSelected('row')}>Merge</button>
-                  <button onClick={() => netSelected('row')}>NET</button>
-                  <button onClick={() => clearSel('row')}>Clear</button>
-                </span>
-              )}
-              {selCols.size >= 2 && (
-                <span className="ct-select-group">
-                  <span className="muted">{selCols.size} columns selected</span>
-                  <button onClick={() => mergeSelected('col')}>Merge</button>
-                  <button onClick={() => netSelected('col')}>NET</button>
-                  <button onClick={() => clearSel('col')}>Clear</button>
-                </span>
-              )}
-            </div>
-          )}
-
-          {selCells.size > 0 && (
-            <div className="ct-select-bar">
-              <span className="ct-select-group">
-                <span className="muted">
-                  {selCells.size} cell{selCells.size === 1 ? '' : 's'} selected
-                  {selCells.size !== 2 ? ' (pick exactly 2)' : ''}
-                </span>
-                <button
-                  disabled={selCells.size !== 2}
-                  onClick={runCellSigTest}
-                >
-                  Sig test
-                </button>
-                <button onClick={() => setSelCells(new Set())}>Clear</button>
-              </span>
-            </div>
-          )}
-
-          {advancedBanner && selCats.size > 0 && (
-            <div className="ct-select-bar">
-              <span className="ct-select-group">
-                <span className="muted">
-                  {selCats.size} sub-column{selCats.size === 1 ? '' : 's'} selected
-                </span>
-                <button
-                  disabled={selCats.size < 2}
-                  onClick={() => makeBannerGroup('merge')}
-                >
-                  Merge
-                </button>
-                <button
-                  disabled={selCats.size < 2}
-                  onClick={() => makeBannerGroup('net')}
-                >
-                  NET
-                </button>
-                <button onClick={() => setSelCats(new Set())}>Clear</button>
-              </span>
-            </div>
+            <p className="muted ct-select-hint">
+              {selRows.size >= 2 && `${selRows.size} rows selected`}
+              {selRows.size >= 2 && selCols.size >= 2 && ' · '}
+              {selCols.size >= 2 && `${selCols.size} columns selected`}
+              {' — right-click a selected header for Merge / NET / Hide.'}
+            </p>
           )}
 
           <div className="table-scroll">
@@ -2708,17 +2911,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           }
                           onDragLeave={() => onHeaderDragLeave(`leaf:${ci}`)}
                           onDrop={(e) => onHeaderDrop(e, 'col', ci, 'h', true)}
-                          onContextMenu={(e) => {
-                            e.preventDefault()
-                            setAdvMenu({
-                              x: e.clientX,
-                              y: e.clientY,
-                              kind: 'leaf',
-                              seg: c.seg ?? -1,
-                              label: c.label,
-                              group: c.group ?? '',
-                            })
+                          onClick={(e) => {
+                            if (!editing)
+                              toggleCat(key, e.metaKey || e.ctrlKey || e.shiftKey)
                           }}
+                          onContextMenu={(e) => openLeafMenu(c, e)}
                         >
                           {editing ? (
                             <input
@@ -2737,10 +2934,6 @@ export function CrosstabView({ meta, onChanged }: Props) {
                               className={grp ? 'ct-drag ct-group-head' : 'ct-drag'}
                               draggable
                               onDragStart={(e) => startDrag(e, 'col', c.label, c.seg)}
-                              onClick={(e) => {
-                                if (e.metaKey || e.ctrlKey || e.shiftKey)
-                                  toggleCat(key, true)
-                              }}
                               onDoubleClick={() =>
                                 startAdvEdit('leaf', key, dispLeaf(c))
                               }
@@ -2780,10 +2973,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       onDragOver={(e) => onHeaderDragOver(e, key, 'h', true)}
                       onDragLeave={() => onHeaderDragLeave(key)}
                       onDrop={(e) => onHeaderDrop(e, 'col', ci, 'h', true)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        setMenu({ x: e.clientX, y: e.clientY, dim: 'col', label: c.label })
+                      onClick={(e) => {
+                        if (!editing && !isGroup) selectHeader('col', c.label, e)
                       }}
+                      onContextMenu={(e) => openHeaderMenu('col', c.label, e)}
                     >
                       {editing ? (
                         <input
@@ -2802,9 +2995,6 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           className={isGroup ? 'ct-drag ct-group-head' : 'ct-drag'}
                           draggable
                           onDragStart={(e) => startDrag(e, 'col', c.label)}
-                          onClick={
-                            isGroup ? undefined : (e) => selectHeader('col', c.label, e)
-                          }
                           onDoubleClick={() => startHeaderEdit('col', c.label)}
                         >
                           {dispCol(c.label)}
@@ -2840,10 +3030,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       onDragOver={(e) => onHeaderDragOver(e, key, 'v', true)}
                       onDragLeave={() => onHeaderDragLeave(key)}
                       onDrop={(e) => onHeaderDrop(e, 'row', ri, 'v', true)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        setMenu({ x: e.clientX, y: e.clientY, dim: 'row', label })
+                      onClick={(e) => {
+                        if (!editing && !isGroup) selectHeader('row', label, e)
                       }}
+                      onContextMenu={(e) => openHeaderMenu('row', label, e)}
                     >
                       {editing ? (
                         <input
@@ -2862,9 +3052,6 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           className={isGroup ? 'ct-drag ct-group-head' : 'ct-drag'}
                           draggable
                           onDragStart={(e) => startDrag(e, 'row', label)}
-                          onClick={
-                            isGroup ? undefined : (e) => selectHeader('row', label, e)
-                          }
                           onDoubleClick={() => startHeaderEdit('row', label)}
                         >
                           {dispRow(label)}
@@ -2889,16 +3076,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
                           className={`ct-cell${
                             selCells.has(cellKey) ? ' ct-cell-selected' : ''
                           }`}
-                          onClick={(e) => {
-                            if (e.metaKey || e.ctrlKey) {
-                              e.preventDefault()
-                              toggleSel(cellKey)
-                            }
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault()
-                            setCellMenu({ x: e.clientX, y: e.clientY, ri, ci })
-                          }}
+                          onClick={(e) => selectBodyCell(ri, ci, e)}
+                          onContextMenu={(e) => openCellMenu(ri, ci, e)}
                         >
                           {lines.map((ln) => (
                             <span
@@ -2957,14 +3136,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
                             : ''
                         }`}
                         onClick={
-                          selectable
-                            ? (e) => {
-                                if (e.metaKey || e.ctrlKey) {
-                                  e.preventDefault()
-                                  toggleSel(meanKey)
-                                }
-                              }
-                            : undefined
+                          selectable ? (e) => selectMeanCell(ci, e) : undefined
+                        }
+                        onContextMenu={
+                          selectable ? (e) => openMeanMenu(ci, e) : undefined
                         }
                       >
                         {summaryRowValue(s.key, ci)}
@@ -3166,6 +3341,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
       )}
       {menu &&
         (() => {
+          const sel = menu.dim === 'row' ? selRows : selCols
+          const multi = sel.size >= 2 && sel.has(menu.label)
           const isGroup = (menu.dim === 'row' ? rowGroupLabels : colGroupLabels).has(
             menu.label,
           )
@@ -3176,15 +3353,38 @@ export function CrosstabView({ meta, onChanged }: Props) {
             <>
               <div className="ct-menu-backdrop" onClick={() => setMenu(null)} />
               <div className="ct-menu" style={{ left: menu.x, top: menu.y }}>
+                {multi && (
+                  <>
+                    <button
+                      onClick={() => {
+                        mergeSelected(menu.dim)
+                        setMenu(null)
+                      }}
+                    >
+                      Merge {sel.size} {menu.dim === 'row' ? 'rows' : 'columns'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        netSelected(menu.dim)
+                        setMenu(null)
+                      }}
+                    >
+                      NET {sel.size} {menu.dim === 'row' ? 'rows' : 'columns'}
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => {
-                    hideItem(menu.dim, menu.label)
+                    if (multi) hideSelected(menu.dim)
+                    else hideItem(menu.dim, menu.label)
                     setMenu(null)
                   }}
                 >
-                  Hide
+                  {multi
+                    ? `Hide ${sel.size} selected`
+                    : 'Hide'}
                 </button>
-                {isGroup && (
+                {isGroup && !multi && (
                   <>
                     <button
                       onClick={() => {
@@ -3208,21 +3408,64 @@ export function CrosstabView({ meta, onChanged }: Props) {
             </>
           )
         })()}
-      {cellMenu && (
-        <>
-          <div className="ct-menu-backdrop" onClick={() => setCellMenu(null)} />
-          <div className="ct-menu" style={{ left: cellMenu.x, top: cellMenu.y }}>
-            <button
-              onClick={() => {
-                createFilterFromCell(cellMenu.ri, cellMenu.ci)
-                setCellMenu(null)
-              }}
-            >
-              Create filter from this cell
-            </button>
-          </div>
-        </>
-      )}
+      {cellMenu &&
+        (() => {
+          const keys = [...selCells]
+          const means = keys.filter((k) => k.startsWith('mean:')).length
+          const body = keys.length - means
+          const sameKind = means === 0 || body === 0
+          const sigEnabled = !correlationOn && keys.length === 2 && sameKind
+          const filterEnabled = !correlationOn && body > 0
+          return (
+            <>
+              <div
+                className="ct-menu-backdrop"
+                onClick={() => setCellMenu(null)}
+              />
+              <div
+                className="ct-menu"
+                style={{ left: cellMenu.x, top: cellMenu.y }}
+              >
+                <button
+                  disabled={!sigEnabled}
+                  title={
+                    correlationOn
+                      ? 'Not available on correlation tables.'
+                      : 'Select exactly two percentages, or two Means.'
+                  }
+                  onClick={() => {
+                    runCellSigTest()
+                    setCellMenu(null)
+                  }}
+                >
+                  Significance test
+                </button>
+                <button
+                  disabled={!filterEnabled}
+                  title={
+                    correlationOn
+                      ? 'Not available on correlation tables.'
+                      : undefined
+                  }
+                  onClick={() => {
+                    createFilterFromSelection()
+                    setCellMenu(null)
+                  }}
+                >
+                  Create filter from selection
+                </button>
+                <button
+                  onClick={() => {
+                    copyCells()
+                    setCellMenu(null)
+                  }}
+                >
+                  Copy value{selCells.size === 1 ? '' : 's'}
+                </button>
+              </div>
+            </>
+          )
+        })()}
       {advMenu &&
         (() => {
           const grp =
@@ -3231,10 +3474,35 @@ export function CrosstabView({ meta, onChanged }: Props) {
                   (g) => g.seg === advMenu.seg && g.label === advMenu.label,
                 )
               : undefined
+          const leafKey = `${advMenu.seg}${CATSEP}${advMenu.label}`
+          const multi =
+            advMenu.kind === 'leaf' &&
+            selCats.size >= 2 &&
+            selCats.has(leafKey)
           return (
             <>
               <div className="ct-menu-backdrop" onClick={() => setAdvMenu(null)} />
               <div className="ct-menu" style={{ left: advMenu.x, top: advMenu.y }}>
+                {multi && (
+                  <>
+                    <button
+                      onClick={() => {
+                        makeBannerGroup('merge')
+                        setAdvMenu(null)
+                      }}
+                    >
+                      Merge {selCats.size} sub-columns
+                    </button>
+                    <button
+                      onClick={() => {
+                        makeBannerGroup('net')
+                        setAdvMenu(null)
+                      }}
+                    >
+                      NET {selCats.size} sub-columns
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => {
                     if (advMenu.kind === 'leaf')
@@ -3245,7 +3513,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                 >
                   {advMenu.kind === 'parent' ? 'Hide group' : 'Hide'}
                 </button>
-                {grp && (
+                {grp && !multi && (
                   <>
                     <button
                       onClick={() => {
