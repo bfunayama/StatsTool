@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  applyTemplate,
   deleteProject,
   duplicateProject,
   importProjectFile,
   listDataGroups,
   newProject,
   projectExportUrl,
+  refreshData,
   renameProject,
   uploadDataset,
   type DataGroup,
+  type RefreshReport,
   type SourceFormat,
 } from '../api'
 
@@ -39,8 +42,27 @@ export function DatasetImport({ onOpen }: Props) {
     name: string
   } | null>(null)
   const [saveIncludeData, setSaveIncludeData] = useState(true)
+  // An analysis-only project file waiting for the user to pick a data set.
+  const [templatePending, setTemplatePending] = useState<{
+    file: File
+    name: string
+  } | null>(null)
+  // Data set chosen to receive a project file (reverse flow).
+  const [templateDataId, setTemplateDataId] = useState<string | null>(null)
+  // In-place data refresh (update a data set's rows/columns).
+  const [refreshTarget, setRefreshTarget] = useState<{
+    dataId: string
+    sourceFilename: string
+  } | null>(null)
+  const [refreshFile, setRefreshFile] = useState<File | null>(null)
+  const [refreshFormat, setRefreshFormat] = useState<SourceFormat>('medallia')
+  const [refreshReport, setRefreshReport] = useState<RefreshReport | null>(null)
+  const [refreshBusy, setRefreshBusy] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const projectInput = useRef<HTMLInputElement>(null)
+  const templateInput = useRef<HTMLInputElement>(null)
+  const refreshInput = useRef<HTMLInputElement>(null)
 
   const reload = useCallback(() => {
     listDataGroups()
@@ -114,12 +136,91 @@ export function DatasetImport({ onOpen }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const meta = await importProjectFile(file)
-      onOpen(meta.id)
+      const result = await importProjectFile(file)
+      if (result.status === 'imported') {
+        onOpen(result.project.id)
+      } else {
+        // Analysis-only file: ask which data set to apply it to.
+        setTemplatePending({ file, name: result.name })
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not open project file')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function applyTemplateTo(dataId: string) {
+    if (!templatePending) return
+    setBusy(true)
+    setError(null)
+    try {
+      const meta = await applyTemplate(
+        dataId,
+        templatePending.file,
+        templatePending.name,
+      )
+      setTemplatePending(null)
+      onOpen(meta.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not apply template')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleProjectFileForData(file: File) {
+    if (!templateDataId) return
+    setBusy(true)
+    setError(null)
+    try {
+      const meta = await applyTemplate(templateDataId, file)
+      onOpen(meta.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not apply project file')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function closeRefresh() {
+    setRefreshTarget(null)
+    setRefreshFile(null)
+    setRefreshReport(null)
+    setRefreshError(null)
+  }
+
+  async function previewRefresh() {
+    if (!refreshTarget || !refreshFile) return
+    setRefreshBusy(true)
+    setRefreshError(null)
+    try {
+      const report = await refreshData(
+        refreshTarget.dataId,
+        refreshFile,
+        refreshFormat,
+        false,
+      )
+      setRefreshReport(report)
+    } catch (err) {
+      setRefreshError(err instanceof Error ? err.message : 'Could not read file')
+    } finally {
+      setRefreshBusy(false)
+    }
+  }
+
+  async function commitRefresh() {
+    if (!refreshTarget || !refreshFile) return
+    setRefreshBusy(true)
+    setRefreshError(null)
+    try {
+      await refreshData(refreshTarget.dataId, refreshFile, refreshFormat, true)
+      closeRefresh()
+      reload()
+    } catch (err) {
+      setRefreshError(err instanceof Error ? err.message : 'Could not update data')
+    } finally {
+      setRefreshBusy(false)
     }
   }
 
@@ -164,6 +265,32 @@ export function DatasetImport({ onOpen }: Props) {
           e.target.value = ''
         }}
       />
+      <input
+        ref={templateInput}
+        type="file"
+        accept=".statstool,.zip"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) handleProjectFileForData(file)
+          e.target.value = ''
+        }}
+      />
+      <input
+        ref={refreshInput}
+        type="file"
+        accept=".csv,.tsv,.txt"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) {
+            setRefreshReport(null)
+            setRefreshError(null)
+            setRefreshFile(file)
+          }
+          e.target.value = ''
+        }}
+      />
       <div className="import-buttons">
         <button
           className="primary"
@@ -176,12 +303,12 @@ export function DatasetImport({ onOpen }: Props) {
           {busy ? 'Working…' : 'Import a data file'}
         </button>
         <button disabled={busy} onClick={() => projectInput.current?.click()}>
-          Open project file…
+          Open project file
         </button>
       </div>
       {error && <p className="error">{error}</p>}
 
-      <h3 style={{ marginTop: '2rem' }}>Data sets &amp; projects</h3>
+      <h3 style={{ marginTop: '2rem' }}>Projects</h3>
       {groups.length === 0 ? (
         <p className="muted">No data sets yet. Import a file to begin.</p>
       ) : (
@@ -195,7 +322,32 @@ export function DatasetImport({ onOpen }: Props) {
                   project{g.projects.length === 1 ? '' : 's'}
                 </span>
                 <button onClick={() => addProject(g.data_id)}>
-                  + New project
+                  New analysis
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    setRefreshTarget({
+                      dataId: g.data_id,
+                      sourceFilename: g.source_filename,
+                    })
+                    setRefreshFormat(g.source_format)
+                    setRefreshFile(null)
+                    setRefreshReport(null)
+                    setRefreshError(null)
+                    refreshInput.current?.click()
+                  }}
+                >
+                  Update data
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    setTemplateDataId(g.data_id)
+                    templateInput.current?.click()
+                  }}
+                >
+                  Connect analysis file
                 </button>
               </div>
               <ul className="project-list">
@@ -228,7 +380,7 @@ export function DatasetImport({ onOpen }: Props) {
                           })
                         }
                       >
-                        Save file
+                        Download
                       </button>
                       <button
                         className="danger"
@@ -378,6 +530,188 @@ export function DatasetImport({ onOpen }: Props) {
               <button className="primary" onClick={doSave}>
                 Save file
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {templatePending && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setTemplatePending(null)}
+        >
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Apply template to a data set</h3>
+            </div>
+            <p className="muted">
+              “{templatePending.name}” has no raw data, so it is a template.
+              Choose a data set to apply its analysis to — variables, questions,
+              filters and tables are matched by column name, and anything that
+              doesn&apos;t match is left out.
+            </p>
+            {groups.length === 0 ? (
+              <p className="muted">
+                No data sets yet. Import a data file first, then apply the
+                template.
+              </p>
+            ) : (
+              <ul className="template-targets">
+                {groups.map((g) => (
+                  <li key={g.data_id}>
+                    <button
+                      disabled={busy}
+                      onClick={() => applyTemplateTo(g.data_id)}
+                    >
+                      <span>{g.source_filename}</span>
+                      <span className="muted">
+                        {g.n_rows} rows · {g.n_cols} columns
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="modal-actions">
+              <button onClick={() => setTemplatePending(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {refreshTarget && refreshFile && (
+        <div className="modal-backdrop" onClick={closeRefresh}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Update data set</h3>
+            </div>
+            <p className="muted">
+              Replace the data behind “{refreshTarget.sourceFilename}” with{' '}
+              <strong>{refreshFile.name}</strong>. Every analysis on this data set
+              updates; a one-level backup of the current data is kept.
+            </p>
+            <fieldset className="import-format">
+              <legend>File type</legend>
+              <label className="ct-check">
+                <input
+                  type="radio"
+                  name="refresh-format"
+                  checked={refreshFormat === 'medallia'}
+                  onChange={() => {
+                    setRefreshFormat('medallia')
+                    setRefreshReport(null)
+                  }}
+                />
+                Medallia export
+              </label>
+              <label className="ct-check">
+                <input
+                  type="radio"
+                  name="refresh-format"
+                  checked={refreshFormat === 'askable'}
+                  onChange={() => {
+                    setRefreshFormat('askable')
+                    setRefreshReport(null)
+                  }}
+                />
+                Askable export
+              </label>
+            </fieldset>
+
+            {refreshReport && (
+              <div className="refresh-report">
+                <p>
+                  Rows: {refreshReport.old_rows} → <strong>{refreshReport.new_rows}</strong>
+                  {'  ·  '}
+                  Columns: {refreshReport.old_cols} → <strong>{refreshReport.new_cols}</strong>
+                </p>
+                <p className="muted">
+                  {refreshReport.added.length} added
+                  {refreshReport.added.length > 0 &&
+                    `: ${refreshReport.added.slice(0, 8).join(', ')}${
+                      refreshReport.added.length > 8 ? '…' : ''
+                    }`}
+                  {'  ·  '}
+                  {refreshReport.removed.length} removed
+                  {refreshReport.removed.length > 0 &&
+                    `: ${refreshReport.removed.slice(0, 8).join(', ')}${
+                      refreshReport.removed.length > 8 ? '…' : ''
+                    }`}
+                </p>
+                {refreshReport.projects.some(
+                  (p) =>
+                    p.dropped_questions + p.dropped_filters + p.dropped_crosstabs >
+                    0,
+                ) && (
+                  <div className="refresh-impact">
+                    <strong>Impact on your analyses</strong>
+                    <ul>
+                      {refreshReport.projects
+                        .filter(
+                          (p) =>
+                            p.dropped_questions +
+                              p.dropped_filters +
+                              p.dropped_crosstabs >
+                            0,
+                        )
+                        .map((p) => (
+                          <li key={p.id}>
+                            {p.name} —{' '}
+                            {[
+                              p.dropped_questions &&
+                                `${p.dropped_questions} question${p.dropped_questions === 1 ? '' : 's'}`,
+                              p.dropped_filters &&
+                                `${p.dropped_filters} filter${p.dropped_filters === 1 ? '' : 's'}`,
+                              p.dropped_crosstabs &&
+                                `${p.dropped_crosstabs} table${p.dropped_crosstabs === 1 ? '' : 's'}`,
+                            ]
+                              .filter(Boolean)
+                              .join(', ')}{' '}
+                            removed (columns no longer in the data)
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+                {refreshReport.removed.length === 0 &&
+                  refreshReport.projects.every(
+                    (p) =>
+                      p.dropped_questions +
+                        p.dropped_filters +
+                        p.dropped_crosstabs ===
+                      0,
+                  ) && (
+                    <p className="muted">
+                      No columns removed — all analyses carry over unchanged.
+                    </p>
+                  )}
+                <p className="muted">
+                  Any new category values will show unlabelled until you set them.
+                </p>
+              </div>
+            )}
+
+            {refreshError && <p className="error">{refreshError}</p>}
+
+            <div className="modal-actions">
+              <button onClick={closeRefresh}>Cancel</button>
+              {refreshReport ? (
+                <button
+                  className="primary"
+                  disabled={refreshBusy}
+                  onClick={commitRefresh}
+                >
+                  {refreshBusy ? 'Updating…' : 'Update data'}
+                </button>
+              ) : (
+                <button
+                  className="primary"
+                  disabled={refreshBusy}
+                  onClick={previewRefresh}
+                >
+                  {refreshBusy ? 'Reading…' : 'Preview changes'}
+                </button>
+              )}
             </div>
           </div>
         </div>

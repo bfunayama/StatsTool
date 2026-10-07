@@ -20,7 +20,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from .models import DataGroup, DataSet, DatasetMeta, DatasetSummary
+from .models import (
+    DataGroup,
+    DataSet,
+    DatasetMeta,
+    DatasetSummary,
+    RefreshProjectImpact,
+    RefreshReport,
+)
+from .template import apply_template
 
 _ROOT = Path(__file__).resolve().parents[2] / "data"
 SETS_DIR = _ROOT / "sets"
@@ -137,7 +145,9 @@ def projects_for_data(data_id: str) -> list[str]:
     return [m.id for m in _all_projects() if m.data_id == data_id]
 
 
-def create_dataset(df: pd.DataFrame, meta: DatasetMeta) -> None:
+def create_dataset(
+    df: pd.DataFrame, meta: DatasetMeta, source_format: str = "medallia"
+) -> None:
     """Import convenience: create a new DataSet from ``df`` and an initial project.
 
     ``meta.id`` is the project id; a fresh ``data_id`` is generated for the rows.
@@ -150,6 +160,7 @@ def create_dataset(df: pd.DataFrame, meta: DatasetMeta) -> None:
             source_filename=meta.source_filename,
             n_rows=meta.n_rows,
             n_cols=meta.n_cols,
+            source_format=source_format,
             variables=[v.model_copy(deep=True) for v in meta.variables],
             questions=[q.model_copy(deep=True) for q in meta.questions],
         ),
@@ -170,6 +181,18 @@ def _unique_untitled(data_id: str) -> str:
     while f"{base}({n})" in existing:
         n += 1
     return f"{base}({n})"
+
+
+def _unique_name(data_id: str, base: str) -> str:
+    """Make ``base`` unique among a data set's project names (adds ' (n)')."""
+    base = base or _unique_untitled(data_id)
+    existing = {m.name for m in _all_projects() if m.data_id == data_id}
+    if base not in existing:
+        return base
+    n = 1
+    while f"{base} ({n})" in existing:
+        n += 1
+    return f"{base} ({n})"
 
 
 def new_project(data_id: str, name: str) -> DatasetMeta:
@@ -253,6 +276,141 @@ def import_project_zip(raw: bytes) -> DatasetMeta:
     return meta
 
 
+def template_info(raw: bytes) -> dict:
+    """Peek inside a ``.statstool`` file to see if it carries raw data.
+
+    Returns ``{"has_data", "name", "source_filename"}`` so the UI can decide
+    whether to import it directly or apply it as a template onto a data set.
+    """
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("That file is not a StatsTool project file.") from exc
+    names = set(archive.namelist())
+    if "project.json" not in names:
+        raise ValueError("That file is not a StatsTool project file.")
+    meta = DatasetMeta.model_validate_json(archive.read("project.json"))
+    has_data = "data.parquet" in names and "dataset.json" in names
+    return {
+        "has_data": has_data,
+        "name": meta.name or meta.source_filename,
+        "source_filename": meta.source_filename,
+    }
+
+
+def apply_template_zip(raw: bytes, target_data_id: str, name: str = "") -> DatasetMeta:
+    """Apply a project file's analysis onto an existing data set (by column name)."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("That file is not a StatsTool project file.") from exc
+    if "project.json" not in set(archive.namelist()):
+        raise ValueError("That file is not a StatsTool project file.")
+    template = DatasetMeta.model_validate_json(archive.read("project.json"))
+    if not data_exists(target_data_id):
+        raise ValueError("That data set no longer exists.")
+    target = load_data_record(target_data_id)
+    meta = apply_template(template, target)
+    meta.id = new_dataset_id()
+    meta.name = _unique_name(target_data_id, name or meta.name)
+    create_project(meta)
+    return meta
+
+
+def _count_crosstabs(nodes: list) -> int:
+    """Count crosstab (non-folder) nodes anywhere in a saved-crosstab tree."""
+    total = 0
+    for n in nodes:
+        if n.kind == "folder":
+            total += _count_crosstabs(n.children)
+        else:
+            total += 1
+    return total
+
+
+def refresh_data(
+    data_id: str,
+    df: pd.DataFrame,
+    base_variables: list,
+    base_questions: list,
+    source_filename: str,
+    source_format: str,
+    commit: bool,
+) -> RefreshReport:
+    """Replace a data set's rows (dry-run or commit) and re-fit its analyses.
+
+    The new file's columns are matched to each analysis by name: edits on
+    surviving columns are kept, missing columns prune whatever depends on them,
+    and new columns appear as fresh raw variables. ``commit=False`` reports the
+    impact without writing anything.
+    """
+    old = load_data_record(data_id)
+    old_cols = [v.name for v in old.variables]
+    new_cols = [v.name for v in base_variables]
+    old_set, new_set = set(old_cols), set(new_cols)
+
+    new_record = DataSet(
+        id=data_id,
+        source_filename=source_filename,
+        n_rows=int(df.shape[0]),
+        n_cols=int(df.shape[1]),
+        source_format=source_format,
+        variables=[v.model_copy(deep=True) for v in base_variables],
+        questions=[q.model_copy(deep=True) for q in base_questions],
+    )
+
+    impacts: list[RefreshProjectImpact] = []
+    refitted: list[DatasetMeta] = []
+    for meta in _all_projects():
+        if meta.data_id != data_id:
+            continue
+        new_meta = apply_template(meta, new_record)
+        new_meta.id = meta.id
+        new_meta.name = meta.name
+        refitted.append(new_meta)
+        impacts.append(
+            RefreshProjectImpact(
+                id=meta.id,
+                name=meta.name or meta.source_filename,
+                dropped_questions=max(0, len(meta.questions) - len(new_meta.questions)),
+                dropped_filters=max(0, len(meta.filters) - len(new_meta.filters)),
+                dropped_crosstabs=max(
+                    0, _count_crosstabs(meta.crosstabs) - _count_crosstabs(new_meta.crosstabs)
+                ),
+            )
+        )
+
+    report = RefreshReport(
+        old_rows=old.n_rows,
+        new_rows=int(df.shape[0]),
+        old_cols=old.n_cols,
+        new_cols=int(df.shape[1]),
+        added=[c for c in new_cols if c not in old_set],
+        removed=[c for c in old_cols if c not in new_set],
+        source_filename=source_filename,
+        committed=False,
+        projects=impacts,
+    )
+    if not commit:
+        return report
+
+    # Commit: back up the old rows, write the new ones atomically, then persist.
+    data_path = _data_path(data_id)
+    if data_path.exists():
+        shutil.copy2(data_path, data_path.with_suffix(".parquet.bak"))
+    tmp = data_path.with_suffix(".parquet.tmp")
+    df.to_parquet(tmp, index=False)
+    tmp.replace(data_path)
+    _dataset_path(data_id).write_text(
+        new_record.model_dump_json(indent=2), encoding="utf-8"
+    )
+    for new_meta in refitted:
+        save_meta(new_meta)
+    report.committed = True
+    return report
+
+
+
 def _all_projects() -> list[DatasetMeta]:
     if not PROJECTS_DIR.exists():
         return []
@@ -308,6 +466,7 @@ def list_data_groups() -> list[DataGroup]:
                 source_filename=data.source_filename,
                 n_rows=data.n_rows,
                 n_cols=data.n_cols,
+                source_format=data.source_format,
                 projects=ps,
             )
         )

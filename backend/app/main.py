@@ -44,6 +44,7 @@ from .models import (
     PreviewResponse,
     ProjectCreate,
     QuestionsUpdate,
+    RefreshReport,
     Variable,
     VariablesUpdate,
     VariableType,
@@ -135,16 +136,42 @@ def export_project(dataset_id: str, include_data: bool = True) -> Response:
     )
 
 
-@app.post("/api/projects/import", response_model=DatasetMeta)
-async def import_project(file: UploadFile) -> DatasetMeta:
-    """Open a project from an uploaded ``.statstool`` file."""
+@app.post("/api/projects/import")
+async def import_project(file: UploadFile) -> dict:
+    """Open a project from an uploaded ``.statstool`` file.
+
+    Files that carry their raw data are imported straight away. Analysis-only
+    files (saved without data) are templates: the caller must choose a data set
+    to apply them to (``POST /api/data/{data_id}/apply-template``).
+    """
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     try:
-        return storage.import_project_zip(raw)
+        info = storage.template_info(raw)
+        if info["has_data"]:
+            project = storage.import_project_zip(raw)
+            return {"status": "imported", "project": project.model_dump()}
+        return {"status": "needs_target", "name": info["name"]}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/data/{data_id}/apply-template", response_model=DatasetMeta)
+async def apply_template(
+    data_id: str, file: UploadFile, name: str = Form("")
+) -> DatasetMeta:
+    """Apply a project file's analysis onto an existing data set (by column name)."""
+    if not storage.data_exists(data_id):
+        raise HTTPException(status_code=404, detail="Data set not found.")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    try:
+        return storage.apply_template_zip(raw, data_id, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 
 @app.post("/api/datasets", response_model=DatasetMeta)
@@ -160,52 +187,8 @@ async def upload_dataset(
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    if source_format == "askable":
-        return _import_askable(raw, file.filename or "uploaded.csv")
-
-    try:
-        df = ingest.read_table(raw)
-    except Exception as exc:  # noqa: BLE001 - surface parse errors to the user
-        raise HTTPException(
-            status_code=400, detail=f"Could not read file: {exc}"
-        ) from exc
-
-    if df.empty or df.shape[1] == 0:
-        raise HTTPException(status_code=400, detail="No rows or columns found.")
-
-    meta = DatasetMeta(
-        id=storage.new_dataset_id(),
-        source_filename=file.filename or "uploaded.csv",
-        n_rows=int(df.shape[0]),
-        n_cols=int(df.shape[1]),
-        variables=ingest.infer_variables(df),
-    )
-    meta.questions = detect.detect_questions(df, meta.variables)
-    detect.apply_membership(meta.variables, meta.questions)
-    storage.create_dataset(df, meta)
-    return meta
-
-
-def _import_askable(raw: bytes, filename: str) -> DatasetMeta:
-    """Reshape an Askable block-format export and store it as a dataset."""
-    try:
-        header, body = askable.read_askable(raw)
-    except Exception as exc:  # noqa: BLE001 - surface parse errors to the user
-        raise HTTPException(
-            status_code=400, detail=f"Could not read file: {exc}"
-        ) from exc
-    if not askable.is_askable(header):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This does not look like an Askable export (no 'Block type' "
-                "columns found). Try the Medallia/standard format."
-            ),
-        )
-    df, variables, questions = askable.reshape_askable(header, body)
-    if df.empty or df.shape[1] == 0:
-        raise HTTPException(status_code=400, detail="No rows or columns found.")
+    filename = file.filename or "uploaded.csv"
+    df, variables, questions = _parse_upload(raw, source_format, filename)
     meta = DatasetMeta(
         id=storage.new_dataset_id(),
         source_filename=filename,
@@ -214,9 +197,75 @@ def _import_askable(raw: bytes, filename: str) -> DatasetMeta:
         variables=variables,
     )
     meta.questions = questions
-    detect.apply_membership(meta.variables, meta.questions)
-    storage.create_dataset(df, meta)
+    storage.create_dataset(df, meta, source_format=source_format)
     return meta
+
+
+def _parse_upload(
+    raw: bytes, source_format: str, filename: str
+) -> tuple[pd.DataFrame, list[Variable], list["Question"]]:
+    """Parse an uploaded survey file into a dataframe plus base metadata.
+
+    Shared by import and data refresh so both read files the same way.
+    """
+    if source_format == "askable":
+        try:
+            header, body = askable.read_askable(raw)
+        except Exception as exc:  # noqa: BLE001 - surface parse errors to the user
+            raise HTTPException(
+                status_code=400, detail=f"Could not read file: {exc}"
+            ) from exc
+        if not askable.is_askable(header):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This does not look like an Askable export (no 'Block type' "
+                    "columns found). Try the Medallia/standard format."
+                ),
+            )
+        df, variables, questions = askable.reshape_askable(header, body)
+    else:
+        try:
+            df = ingest.read_table(raw)
+        except Exception as exc:  # noqa: BLE001 - surface parse errors to the user
+            raise HTTPException(
+                status_code=400, detail=f"Could not read file: {exc}"
+            ) from exc
+        variables = ingest.infer_variables(df)
+        questions = detect.detect_questions(df, variables)
+    if df.empty or df.shape[1] == 0:
+        raise HTTPException(status_code=400, detail="No rows or columns found.")
+    detect.apply_membership(variables, questions)
+    return df, variables, questions
+
+
+@app.post("/api/data/{data_id}/refresh", response_model=RefreshReport)
+async def refresh_data(
+    data_id: str,
+    file: UploadFile,
+    source_format: str = Form(""),
+    commit: bool = Form(False),
+) -> RefreshReport:
+    """Replace a data set's rows with a new export, re-fitting its analyses.
+
+    ``commit=false`` previews the impact without writing. ``source_format``
+    defaults to how the data set was first imported.
+    """
+    if not storage.data_exists(data_id):
+        raise HTTPException(status_code=404, detail="Data set not found.")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    filename = file.filename or "uploaded.csv"
+    fmt = source_format or storage.load_data_record(data_id).source_format
+    df, variables, questions = _parse_upload(raw, fmt, filename)
+    try:
+        return storage.refresh_data(
+            data_id, df, variables, questions, filename, fmt, commit
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 
 @app.get("/api/datasets/{dataset_id}", response_model=DatasetMeta)

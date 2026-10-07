@@ -156,6 +156,7 @@ export interface DataGroup {
   source_filename: string
   n_rows: number
   n_cols: number
+  source_format: SourceFormat
   projects: DatasetSummary[]
 }
 
@@ -343,15 +344,69 @@ export function projectExportUrl(projectId: string, includeData = true): string 
   return `/api/datasets/${projectId}/export/project?include_data=${includeData}`
 }
 
-export function importProjectFile(file: File): Promise<DatasetMeta> {
+export type ImportResult =
+  | { status: 'imported'; project: DatasetMeta }
+  | { status: 'needs_target'; name: string }
+
+export function importProjectFile(file: File): Promise<ImportResult> {
   const form = new FormData()
   form.append('file', file)
   return fetch('/api/projects/import', { method: 'POST', body: form }).then(
-    handle<DatasetMeta>,
+    handle<ImportResult>,
   )
 }
 
+export function applyTemplate(
+  dataId: string,
+  file: File,
+  name = '',
+): Promise<DatasetMeta> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('name', name)
+  return fetch(`/api/data/${dataId}/apply-template`, {
+    method: 'POST',
+    body: form,
+  }).then(handle<DatasetMeta>)
+}
+
 export type SourceFormat = 'medallia' | 'askable'
+
+export interface RefreshProjectImpact {
+  id: string
+  name: string
+  dropped_questions: number
+  dropped_filters: number
+  dropped_crosstabs: number
+}
+
+export interface RefreshReport {
+  old_rows: number
+  new_rows: number
+  old_cols: number
+  new_cols: number
+  added: string[]
+  removed: string[]
+  source_filename: string
+  committed: boolean
+  projects: RefreshProjectImpact[]
+}
+
+export function refreshData(
+  dataId: string,
+  file: File,
+  sourceFormat: SourceFormat,
+  commit: boolean,
+): Promise<RefreshReport> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('source_format', sourceFormat)
+  form.append('commit', String(commit))
+  return fetch(`/api/data/${dataId}/refresh`, {
+    method: 'POST',
+    body: form,
+  }).then(handle<RefreshReport>)
+}
 
 export function uploadDataset(
   file: File,

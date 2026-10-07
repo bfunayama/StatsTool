@@ -130,7 +130,7 @@ function App() {
                 </select>
               </label>
             )}
-            <button onClick={() => setSaveOpen(true)}>Save file</button>
+            <button onClick={() => setSaveOpen(true)}>Download</button>
             <button onClick={() => setDatasetId(null)}>← Datasets</button>
           </div>
 

@@ -180,6 +180,7 @@ class DataSet(BaseModel):
     source_filename: str
     n_rows: int
     n_cols: int
+    source_format: str = "medallia"  # how the file was read (medallia | askable)
     variables: list[Variable] = Field(default_factory=list)
     questions: list["Question"] = Field(default_factory=list)
 
@@ -221,6 +222,7 @@ class DataGroup(BaseModel):
     source_filename: str
     n_rows: int
     n_cols: int
+    source_format: str = "medallia"
     projects: list[DatasetSummary] = Field(default_factory=list)
 
 
@@ -228,6 +230,33 @@ class ProjectCreate(BaseModel):
     """Name for a new, duplicated, or renamed project (blank = default)."""
 
     name: str = ""
+
+
+class RefreshProjectImpact(BaseModel):
+    """How a data refresh affected one analysis (what the new data pruned)."""
+
+    id: str
+    name: str
+    dropped_questions: int = 0
+    dropped_filters: int = 0
+    dropped_crosstabs: int = 0
+
+
+class RefreshReport(BaseModel):
+    """Summary of refreshing a data set: row/column changes and per-analysis impact.
+
+    ``committed`` is False for a dry-run preview and True once written.
+    """
+
+    old_rows: int
+    new_rows: int
+    old_cols: int
+    new_cols: int
+    added: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+    source_filename: str = ""
+    committed: bool = False
+    projects: list[RefreshProjectImpact] = Field(default_factory=list)
 
 
 class VariablesUpdate(BaseModel):

@@ -971,3 +971,38 @@ button.danger:hover:not(:disabled) {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
+
+.template-targets {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.template-targets button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  text-align: left;
+}
+
+.refresh-report {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  background: #f7f9fc;
+}
+.refresh-report p {
+  margin: 0.25rem 0;
+}
+.refresh-impact {
+  margin-top: 0.5rem;
+}
+.refresh-impact ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.2rem;
+}
