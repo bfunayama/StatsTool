@@ -32,6 +32,7 @@ from .models import (
     CrosstabRequest,
     CrosstabResponse,
     CrosstabsUpdate,
+    DataGroup,
     DatasetMeta,
     DatasetSummary,
     DistinctResponse,
@@ -41,6 +42,7 @@ from .models import (
     FilterCountResponse,
     FiltersUpdate,
     PreviewResponse,
+    ProjectCreate,
     QuestionsUpdate,
     Variable,
     VariablesUpdate,
@@ -69,8 +71,51 @@ def health() -> dict[str, str]:
 
 @app.get("/api/datasets", response_model=list[DatasetSummary])
 def list_datasets() -> list[DatasetSummary]:
-    """List every imported dataset so the user can reopen one."""
+    """List every project so the user can reopen one."""
     return storage.list_datasets()
+
+
+@app.get("/api/data", response_model=list[DataGroup])
+def list_data_groups() -> list[DataGroup]:
+    """List data sets grouped with the projects (analyses) built on each."""
+    return storage.list_data_groups()
+
+
+@app.post("/api/data/{data_id}/projects", response_model=DatasetMeta)
+def new_project(data_id: str, payload: ProjectCreate) -> DatasetMeta:
+    """Create a fresh project on an existing data set."""
+    if not storage.data_exists(data_id):
+        raise HTTPException(status_code=404, detail="Data set not found.")
+    return storage.new_project(data_id, payload.name)
+
+
+@app.post("/api/datasets/{dataset_id}/duplicate", response_model=DatasetMeta)
+def duplicate_project(dataset_id: str, payload: ProjectCreate) -> DatasetMeta:
+    """Copy a project (all its analysis) under a new id."""
+    if not storage.dataset_exists(dataset_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return storage.duplicate_project(dataset_id, payload.name)
+
+
+@app.put("/api/datasets/{dataset_id}/name", response_model=DatasetMeta)
+def rename_project(dataset_id: str, payload: ProjectCreate) -> DatasetMeta:
+    """Rename a project."""
+    meta, _ = _load(dataset_id)
+    meta.name = payload.name or meta.name
+    storage.save_meta(meta)
+    return meta
+
+
+@app.delete("/api/datasets/{dataset_id}")
+def delete_project(dataset_id: str) -> dict[str, str]:
+    """Delete a project; also remove its data set when no projects remain."""
+    if not storage.dataset_exists(dataset_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    data_id = storage.load_meta(dataset_id).data_id
+    storage.delete_project(dataset_id)
+    if data_id and not storage.projects_for_data(data_id):
+        storage.delete_data(data_id)
+    return {"deleted": dataset_id}
 
 
 @app.post("/api/datasets", response_model=DatasetMeta)

@@ -55,7 +55,8 @@ function App() {
         </h1>
         {meta && (
           <span className="muted">
-            {meta.source_filename} · {meta.n_rows} rows · {meta.n_cols} columns
+            {meta.name || meta.source_filename} · {meta.n_rows} rows ·{' '}
+            {meta.n_cols} columns
           </span>
         )}
       </header>

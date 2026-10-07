@@ -169,13 +169,34 @@ class Question(BaseModel):
     columns: list[AxisLabel] = Field(default_factory=list)  # grid2d column axis
 
 
-class DatasetMeta(BaseModel):
-    """Everything we know about an imported dataset except the raw rows."""
+class DataSet(BaseModel):
+    """The imported raw data shared by one or more projects (analyses).
+
+    Holds the import-time base ``variables``/``questions`` so a fresh project can
+    start from the data's original structure.
+    """
 
     id: str
     source_filename: str
     n_rows: int
     n_cols: int
+    variables: list[Variable] = Field(default_factory=list)
+    questions: list["Question"] = Field(default_factory=list)
+
+
+class DatasetMeta(BaseModel):
+    """A project (analysis) over a DataSet: its variables, labels, and saved work.
+
+    ``data_id`` links to the ``DataSet`` holding the raw rows; several projects can
+    reference the same data.
+    """
+
+    id: str
+    source_filename: str
+    n_rows: int
+    n_cols: int
+    data_id: str = ""
+    name: str = ""
     variables: list[Variable]
     questions: list["Question"] = Field(default_factory=list)
     filters: list["Filter"] = Field(default_factory=list)
@@ -183,12 +204,30 @@ class DatasetMeta(BaseModel):
 
 
 class DatasetSummary(BaseModel):
-    """Lightweight dataset entry for listing available datasets."""
+    """Lightweight project entry for listing available projects."""
 
     id: str
     source_filename: str
     n_rows: int
     n_cols: int
+    data_id: str = ""
+    name: str = ""
+
+
+class DataGroup(BaseModel):
+    """A data set together with the projects (analyses) built on it."""
+
+    data_id: str
+    source_filename: str
+    n_rows: int
+    n_cols: int
+    projects: list[DatasetSummary] = Field(default_factory=list)
+
+
+class ProjectCreate(BaseModel):
+    """Name for a new, duplicated, or renamed project (blank = default)."""
+
+    name: str = ""
 
 
 class VariablesUpdate(BaseModel):

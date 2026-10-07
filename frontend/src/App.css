@@ -897,3 +897,71 @@ button.danger:hover:not(:disabled) {
   margin-top: 0.5rem;
   background: #fff;
 }
+
+/* Data sets & projects landing list */
+.data-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.data-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.data-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.data-group-name {
+  font-weight: 600;
+}
+.data-group-head .muted {
+  flex: 1;
+  font-size: 0.85rem;
+}
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  border-top: 1px solid var(--border);
+}
+.project-row:first-child {
+  border-top: none;
+}
+.project-open {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  padding: 0.25rem 0.35rem;
+  border-radius: 4px;
+}
+.project-open:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.project-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+.project-actions button.danger {
+  color: #c1121f;
+}
+
+.modal .danger {
+  background: #c1121f;
+  color: #fff;
+  border-color: #c1121f;
+}

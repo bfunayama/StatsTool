@@ -100,6 +100,8 @@ export interface DatasetMeta {
   source_filename: string
   n_rows: number
   n_cols: number
+  data_id?: string
+  name?: string
   variables: Variable[]
   questions: Question[]
   filters: Filter[]
@@ -145,6 +147,16 @@ export interface DatasetSummary {
   source_filename: string
   n_rows: number
   n_cols: number
+  data_id?: string
+  name?: string
+}
+
+export interface DataGroup {
+  data_id: string
+  source_filename: string
+  n_rows: number
+  n_cols: number
+  projects: DatasetSummary[]
 }
 
 export interface PreviewResponse {
@@ -285,6 +297,46 @@ function postJson<T>(url: string, body: unknown): Promise<T> {
 
 export function listDatasets(): Promise<DatasetSummary[]> {
   return fetch('/api/datasets').then(handle<DatasetSummary[]>)
+}
+
+export function listDataGroups(): Promise<DataGroup[]> {
+  return fetch('/api/data').then(handle<DataGroup[]>)
+}
+
+export function newProject(dataId: string, name = ''): Promise<DatasetMeta> {
+  return fetch(`/api/data/${dataId}/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then(handle<DatasetMeta>)
+}
+
+export function duplicateProject(
+  projectId: string,
+  name = '',
+): Promise<DatasetMeta> {
+  return fetch(`/api/datasets/${projectId}/duplicate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then(handle<DatasetMeta>)
+}
+
+export function renameProject(
+  projectId: string,
+  name: string,
+): Promise<DatasetMeta> {
+  return fetch(`/api/datasets/${projectId}/name`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }).then(handle<DatasetMeta>)
+}
+
+export function deleteProject(projectId: string): Promise<void> {
+  return fetch(`/api/datasets/${projectId}`, { method: 'DELETE' }).then((r) => {
+    if (!r.ok) throw new Error('Could not delete project.')
+  })
 }
 
 export type SourceFormat = 'medallia' | 'askable'
