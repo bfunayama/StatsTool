@@ -21,6 +21,8 @@ export function DatasetImport({ onOpen }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [format, setFormat] = useState<SourceFormat>('medallia')
+  const [importOpen, setImportOpen] = useState(false)
+  const [pendingFormat, setPendingFormat] = useState<SourceFormat | null>(null)
   // In-app modals (native confirm/prompt are auto-dismissed in the shared browser).
   const [renameTarget, setRenameTarget] = useState<{
     projectId: string
@@ -140,33 +142,6 @@ export function DatasetImport({ onOpen }: Props) {
         are handled automatically.
       </p>
 
-      <fieldset className="import-format">
-        <legend>File type</legend>
-        <label className="ct-check">
-          <input
-            type="radio"
-            name="source-format"
-            checked={format === 'medallia'}
-            onChange={() => setFormat('medallia')}
-          />
-          Medallia export
-          <span className="muted"> — standard, one column per question</span>
-        </label>
-        <label className="ct-check">
-          <input
-            type="radio"
-            name="source-format"
-            checked={format === 'askable'}
-            onChange={() => setFormat('askable')}
-          />
-          Askable export
-          <span className="muted">
-            {' '}
-            — block layout (Unmoderated or Survey), reshaped on import
-          </span>
-        </label>
-      </fieldset>
-
       <input
         ref={fileInput}
         type="file"
@@ -193,9 +168,12 @@ export function DatasetImport({ onOpen }: Props) {
         <button
           className="primary"
           disabled={busy}
-          onClick={() => fileInput.current?.click()}
+          onClick={() => {
+            setPendingFormat(null)
+            setImportOpen(true)
+          }}
         >
-          {busy ? 'Working…' : 'Choose file to import'}
+          {busy ? 'Working…' : 'Import a data file'}
         </button>
         <button disabled={busy} onClick={() => projectInput.current?.click()}>
           Open project file…
@@ -270,6 +248,58 @@ export function DatasetImport({ onOpen }: Props) {
               </ul>
             </div>
           ))}
+        </div>
+      )}
+
+      {importOpen && (
+        <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Import a data file</h3>
+            </div>
+            <p className="muted">
+              Choose the kind of export you&apos;re importing. This is required so
+              each file is read correctly.
+            </p>
+            <label className="ct-check">
+              <input
+                type="radio"
+                name="import-format"
+                checked={pendingFormat === 'medallia'}
+                onChange={() => setPendingFormat('medallia')}
+              />
+              Medallia export
+              <span className="muted"> — standard, one column per question</span>
+            </label>
+            <label className="ct-check">
+              <input
+                type="radio"
+                name="import-format"
+                checked={pendingFormat === 'askable'}
+                onChange={() => setPendingFormat('askable')}
+              />
+              Askable export
+              <span className="muted">
+                {' '}
+                — block layout (Unmoderated or Survey), reshaped on import
+              </span>
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setImportOpen(false)}>Cancel</button>
+              <button
+                className="primary"
+                disabled={pendingFormat === null}
+                onClick={() => {
+                  if (!pendingFormat) return
+                  setFormat(pendingFormat)
+                  setImportOpen(false)
+                  fileInput.current?.click()
+                }}
+              >
+                Choose file…
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
