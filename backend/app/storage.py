@@ -11,8 +11,11 @@ that link, so the rest of the app keeps addressing everything by project id.
 
 from __future__ import annotations
 
+import io
+import json
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -192,6 +195,60 @@ def duplicate_project(project_id: str, name: str) -> DatasetMeta:
     meta = src.model_copy(deep=True)
     meta.id = new_dataset_id()
     meta.name = name or f"Copy of {src.name or src.source_filename}"
+    create_project(meta)
+    return meta
+
+
+# --- Portable project files (.statstool = a zip) ----------------------------
+
+
+def export_project_zip(project_id: str, include_data: bool = True) -> bytes:
+    """Bundle a project (and optionally its raw data) into a zip for download."""
+    meta = load_meta(project_id)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "version": 1,
+                    "has_data": include_data,
+                    "project_name": meta.name or meta.source_filename,
+                    "source_filename": meta.source_filename,
+                }
+            ),
+        )
+        z.writestr("project.json", meta.model_dump_json(indent=2))
+        if include_data and meta.data_id and data_exists(meta.data_id):
+            data = load_data_record(meta.data_id)
+            z.writestr("dataset.json", data.model_dump_json(indent=2))
+            z.write(_data_path(meta.data_id), "data.parquet")
+    return buf.getvalue()
+
+
+def import_project_zip(raw: bytes) -> DatasetMeta:
+    """Restore a project (with its data) from a ``.statstool`` zip under new ids."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("That file is not a StatsTool project file.") from exc
+    names = set(archive.namelist())
+    if "project.json" not in names:
+        raise ValueError("That file is not a StatsTool project file.")
+    meta = DatasetMeta.model_validate_json(archive.read("project.json"))
+    if "data.parquet" not in names or "dataset.json" not in names:
+        raise ValueError(
+            "This project file has no raw data. Opening analysis-only templates "
+            "is coming soon."
+        )
+    data = DataSet.model_validate_json(archive.read("dataset.json"))
+    data.id = new_dataset_id()
+    folder = _set_dir(data.id)
+    folder.mkdir(parents=True, exist_ok=True)
+    _data_path(data.id).write_bytes(archive.read("data.parquet"))
+    _dataset_path(data.id).write_text(data.model_dump_json(indent=2), encoding="utf-8")
+    meta.id = new_dataset_id()
+    meta.data_id = data.id
     create_project(meta)
     return meta
 

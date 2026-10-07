@@ -965,3 +965,9 @@ button.danger:hover:not(:disabled) {
   color: #fff;
   border-color: #c1121f;
 }
+
+.import-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}

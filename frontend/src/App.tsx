@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-import { getDataset, type DatasetMeta } from './api'
+import { getDataset, projectExportUrl, type DatasetMeta } from './api'
 import { DatasetImport } from './components/DatasetImport'
 import { DataPreview } from './components/DataPreview'
 import { CrosstabView } from './components/CrosstabView'
@@ -22,6 +22,19 @@ function App() {
   )
   const [dataFilter, setDataFilter] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveIncludeData, setSaveIncludeData] = useState(true)
+
+  function doSave() {
+    if (!meta) return
+    const a = document.createElement('a')
+    a.href = projectExportUrl(meta.id, saveIncludeData)
+    a.download = `${meta.name || meta.source_filename}.statstool`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setSaveOpen(false)
+  }
 
   useEffect(() => {
     if (!datasetId) {
@@ -117,6 +130,7 @@ function App() {
                 </select>
               </label>
             )}
+            <button onClick={() => setSaveOpen(true)}>Save file</button>
             <button onClick={() => setDatasetId(null)}>← Datasets</button>
           </div>
 
@@ -130,6 +144,39 @@ function App() {
           {tab === 'data' && (
             <DataPreview datasetId={meta.id} filterId={dataFilter || undefined} />
           )}
+        </div>
+      )}
+
+      {saveOpen && meta && (
+        <div className="modal-backdrop" onClick={() => setSaveOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Save project file</h3>
+            </div>
+            <p>
+              Download “{meta.name || meta.source_filename}” as a .statstool
+              file you can reopen or share.
+            </p>
+            <label className="ct-check">
+              <input
+                type="checkbox"
+                checked={saveIncludeData}
+                onChange={(e) => setSaveIncludeData(e.target.checked)}
+              />
+              Include the raw data
+              <span className="muted">
+                {' '}
+                — makes the file fully portable (larger). Uncheck for an
+                analysis-only template.
+              </span>
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setSaveOpen(false)}>Cancel</button>
+              <button className="primary" onClick={doSave}>
+                Save file
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

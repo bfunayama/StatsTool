@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   deleteProject,
   duplicateProject,
+  importProjectFile,
   listDataGroups,
   newProject,
+  projectExportUrl,
   renameProject,
   uploadDataset,
   type DataGroup,
@@ -30,7 +32,13 @@ export function DatasetImport({ onOpen }: Props) {
     name: string
     lastOnData: boolean
   } | null>(null)
+  const [saveTarget, setSaveTarget] = useState<{
+    projectId: string
+    name: string
+  } | null>(null)
+  const [saveIncludeData, setSaveIncludeData] = useState(true)
   const fileInput = useRef<HTMLInputElement>(null)
+  const projectInput = useRef<HTMLInputElement>(null)
 
   const reload = useCallback(() => {
     listDataGroups()
@@ -100,6 +108,30 @@ export function DatasetImport({ onOpen }: Props) {
     }
   }
 
+  async function handleProjectFile(file: File) {
+    setBusy(true)
+    setError(null)
+    try {
+      const meta = await importProjectFile(file)
+      onOpen(meta.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open project file')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function doSave() {
+    if (!saveTarget) return
+    const a = document.createElement('a')
+    a.href = projectExportUrl(saveTarget.projectId, saveIncludeData)
+    a.download = `${saveTarget.name}.statstool`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setSaveTarget(null)
+  }
+
   return (
     <div className="panel">
       <h2>Import survey data</h2>
@@ -146,13 +178,29 @@ export function DatasetImport({ onOpen }: Props) {
           e.target.value = ''
         }}
       />
-      <button
-        className="primary"
-        disabled={busy}
-        onClick={() => fileInput.current?.click()}
-      >
-        {busy ? 'Importing…' : 'Choose file to import'}
-      </button>
+      <input
+        ref={projectInput}
+        type="file"
+        accept=".statstool,.zip"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) handleProjectFile(file)
+          e.target.value = ''
+        }}
+      />
+      <div className="import-buttons">
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() => fileInput.current?.click()}
+        >
+          {busy ? 'Working…' : 'Choose file to import'}
+        </button>
+        <button disabled={busy} onClick={() => projectInput.current?.click()}>
+          Open project file…
+        </button>
+      </div>
       {error && <p className="error">{error}</p>}
 
       <h3 style={{ marginTop: '2rem' }}>Data sets &amp; projects</h3>
@@ -194,6 +242,16 @@ export function DatasetImport({ onOpen }: Props) {
                         Rename
                       </button>
                       <button onClick={() => copyProject(p.id)}>Duplicate</button>
+                      <button
+                        onClick={() =>
+                          setSaveTarget({
+                            projectId: p.id,
+                            name: p.name || p.source_filename,
+                          })
+                        }
+                      >
+                        Save file
+                      </button>
                       <button
                         className="danger"
                         onClick={() =>
@@ -256,6 +314,39 @@ export function DatasetImport({ onOpen }: Props) {
               <button onClick={() => setDeleteTarget(null)}>Cancel</button>
               <button className="danger" onClick={confirmDelete}>
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveTarget && (
+        <div className="modal-backdrop" onClick={() => setSaveTarget(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Save project file</h3>
+            </div>
+            <p>
+              Download “{saveTarget.name}” as a .statstool file you can reopen or
+              share.
+            </p>
+            <label className="ct-check">
+              <input
+                type="checkbox"
+                checked={saveIncludeData}
+                onChange={(e) => setSaveIncludeData(e.target.checked)}
+              />
+              Include the raw data
+              <span className="muted">
+                {' '}
+                — makes the file fully portable (larger). Uncheck for an
+                analysis-only template.
+              </span>
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setSaveTarget(null)}>Cancel</button>
+              <button className="primary" onClick={doSave}>
+                Save file
               </button>
             </div>
           </div>

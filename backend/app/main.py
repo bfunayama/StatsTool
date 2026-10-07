@@ -118,6 +118,35 @@ def delete_project(dataset_id: str) -> dict[str, str]:
     return {"deleted": dataset_id}
 
 
+@app.get("/api/datasets/{dataset_id}/export/project")
+def export_project(dataset_id: str, include_data: bool = True) -> Response:
+    """Download a project as a portable ``.statstool`` file (a zip)."""
+    if not storage.dataset_exists(dataset_id):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    meta = storage.load_meta(dataset_id)
+    data = storage.export_project_zip(dataset_id, include_data)
+    safe = (meta.name or meta.source_filename or "project").replace('"', "")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe}.statstool"'
+        },
+    )
+
+
+@app.post("/api/projects/import", response_model=DatasetMeta)
+async def import_project(file: UploadFile) -> DatasetMeta:
+    """Open a project from an uploaded ``.statstool`` file."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    try:
+        return storage.import_project_zip(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/datasets", response_model=DatasetMeta)
 async def upload_dataset(
     file: UploadFile, source_format: str = Form("medallia")

@@ -339,6 +339,18 @@ export function deleteProject(projectId: string): Promise<void> {
   })
 }
 
+export function projectExportUrl(projectId: string, includeData = true): string {
+  return `/api/datasets/${projectId}/export/project?include_data=${includeData}`
+}
+
+export function importProjectFile(file: File): Promise<DatasetMeta> {
+  const form = new FormData()
+  form.append('file', file)
+  return fetch('/api/projects/import', { method: 'POST', body: form }).then(
+    handle<DatasetMeta>,
+  )
+}
+
 export type SourceFormat = 'medallia' | 'askable'
 
 export function uploadDataset(
