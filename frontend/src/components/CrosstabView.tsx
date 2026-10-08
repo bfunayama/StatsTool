@@ -19,9 +19,11 @@ import {
   type CrosstabResponse,
   type CrosstabRowSpec,
   type DatasetMeta,
+  type DriverSpec,
   type Filter,
   type SavedCrosstabSpec,
 } from '../api'
+import { DriverPanel, defaultDriverSpec } from './DriverPanel'
 
 interface Props {
   meta: DatasetMeta
@@ -562,6 +564,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
     (JSON.stringify(builderSpec) !== JSON.stringify(selectedNode.spec) ||
       titleDraft.trim() !== selectedNode.name)
 
+  const driverNode =
+    selectedNode && selectedNode.kind === 'driver' ? selectedNode : null
+
   function selectCrosstab(node: CrosstabNode) {
     if (!node.spec) return
     loadSpec(node.spec)
@@ -569,6 +574,29 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setTitleDraft(node.name)
     // New tables should save alongside the one you opened.
     setActiveFolderId(findParentId(tree, node.id, null) ?? null)
+  }
+
+  function selectDriver(node: CrosstabNode) {
+    setSelectedId(node.id)
+    setActiveFolderId(findParentId(tree, node.id, null) ?? null)
+  }
+
+  function newDriver() {
+    const node: CrosstabNode = {
+      id: crypto.randomUUID(),
+      name: 'Driver analysis',
+      kind: 'driver',
+      children: [],
+      spec: null,
+      driver: defaultDriverSpec(),
+      version: 1,
+    }
+    persistTree(insertNode(tree, activeFolderId, node))
+    setSelectedId(node.id)
+  }
+
+  function saveDriverNode(node: CrosstabNode, name: string, spec: DriverSpec) {
+    persistTree(updateNode(tree, node.id, { name, driver: spec }))
   }
 
   function closeTable() {
@@ -2364,7 +2392,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
             <button
               className={isFolder ? 'ct-node-name ct-folder' : 'ct-node-name'}
               onClick={() =>
-                isFolder ? setActiveFolderId(node.id) : selectCrosstab(node)
+                isFolder
+                  ? setActiveFolderId(node.id)
+                  : node.kind === 'driver'
+                    ? selectDriver(node)
+                    : selectCrosstab(node)
               }
               onDoubleClick={() => startRename(node)}
               title={
@@ -2373,6 +2405,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                   : 'Open table; double-click to rename'
               }
             >
+              {node.kind === 'driver' && <span className="ct-node-tag">Driver</span>}
               {node.name}
             </button>
           )}
@@ -2403,6 +2436,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
             title="Start a new blank crosstab with default selections"
           >
             + Table
+          </button>
+          <button
+            onClick={newDriver}
+            title="Add a driver (relative importance) analysis"
+          >
+            + Driver
           </button>
           <button onClick={newFolder} title="New folder">
             + Folder
@@ -2461,6 +2500,16 @@ export function CrosstabView({ meta, onChanged }: Props) {
         aria-orientation="vertical"
       />
 
+      {driverNode ? (
+        <DriverPanel
+          key={driverNode.id}
+          datasetId={meta.id}
+          meta={meta}
+          name={driverNode.name}
+          spec={driverNode.driver ?? defaultDriverSpec()}
+          onSave={(nm, sp) => saveDriverNode(driverNode, nm, sp)}
+        />
+      ) : (
       <div className="ct-main">
         <div className="ct-builder-head">
           <label className="field ct-title-field">
@@ -3538,6 +3587,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
           )
         })()}
       </div>
+      )}
 
       {sigTest && (
         <div className="modal-backdrop" onClick={() => setSigTest(null)}>

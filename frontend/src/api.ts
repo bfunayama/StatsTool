@@ -265,12 +265,51 @@ export interface SavedCrosstabSpec {
   corr_with?: string | null
 }
 
+export interface DriverSpec {
+  outcome: string
+  driver_kind: 'question' | 'variables'
+  driver_question: string
+  driver_variables: string[]
+  method: 'relative_weights' | 'shapley' | 'ordered_logit'
+  weight: string | null
+  filter_id: string | null
+  trim_outliers: boolean
+  outlier_pct: number
+}
+
+export interface DriverRow {
+  name: string
+  label: string
+  importance: number
+  importance_pct: number
+  signed_pct: number
+  correlation: number
+  beta: number
+  mean: number | null
+}
+
+export interface DriverResponse {
+  outcome_label: string
+  rows: DriverRow[]
+  r2: number
+  adj_r2: number | null
+  base_n: number
+  eff_base_n: number | null
+  weighted: boolean
+  method: string
+  weight_label: string | null
+  filter_label: string | null
+  trimmed: number
+  n_drivers: number
+}
+
 export interface CrosstabNode {
   id: string
   name: string
-  kind: 'folder' | 'crosstab'
+  kind: 'folder' | 'crosstab' | 'driver'
   children: CrosstabNode[]
   spec: SavedCrosstabSpec | null
+  driver?: DriverSpec | null
   version: number
 }
 
@@ -503,6 +542,13 @@ export function runCrosstab(
     correlation: req.correlation ?? false,
     corr_with: req.corrWith ?? null,
   })
+}
+
+export function computeDrivers(
+  id: string,
+  spec: DriverSpec,
+): Promise<DriverResponse> {
+  return postJson(`/api/datasets/${id}/drivers`, spec)
 }
 
 export function getCombinations(

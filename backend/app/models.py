@@ -558,18 +558,71 @@ class SavedCrosstabSpec(BaseModel):
     corr_with: str | None = None
 
 
-class CrosstabNode(BaseModel):
-    """A node in the saved-crosstab tree: a folder or a saved crosstab.
+class DriverSpec(BaseModel):
+    """A saved driver (key-driver / relative importance) analysis.
 
-    Folders hold ``children``; crosstabs hold a ``spec``. ``version`` lets the
-    spec grow (nesting, weighting) while older saved tables still load.
+    One numeric ``outcome`` is explained by a set of drivers: either a grid
+    question's items (``driver_kind='question'``) or a hand-picked set of numeric
+    variables (``driver_kind='variables'``). ``method`` selects the algorithm
+    (only ``relative_weights`` is implemented today).
+    """
+
+    outcome: str = ""
+    driver_kind: Literal["question", "variables"] = "variables"
+    driver_question: str = ""
+    driver_variables: list[str] = Field(default_factory=list)
+    method: Literal["relative_weights", "shapley", "ordered_logit"] = (
+        "relative_weights"
+    )
+    weight: str | None = None
+    filter_id: str | None = None
+    trim_outliers: bool = False  # drop the most extreme respondents (Mahalanobis)
+    outlier_pct: float = 5.0
+
+
+class DriverRow(BaseModel):
+    """One driver's importance plus reference statistics."""
+
+    name: str
+    label: str
+    importance: float  # raw relative weight (sums to R² across drivers)
+    importance_pct: float  # share of explained importance, 0..100
+    signed_pct: float  # importance_pct signed by the driver's correlation
+    correlation: float  # zero-order Pearson r with the outcome
+    beta: float  # standardised regression coefficient (reference)
+    mean: float | None = None  # mean driver score (performance axis)
+
+
+class DriverResponse(BaseModel):
+    """A computed driver analysis: ranked drivers plus a model-fit footer."""
+
+    outcome_label: str
+    rows: list[DriverRow]
+    r2: float
+    adj_r2: float | None = None
+    base_n: int
+    eff_base_n: float | None = None
+    weighted: bool = False
+    method: str = "relative_weights"
+    weight_label: str | None = None
+    filter_label: str | None = None
+    trimmed: int = 0  # respondents removed as outliers
+    n_drivers: int = 0
+
+
+class CrosstabNode(BaseModel):
+    """A node in the saved-crosstab tree: a folder, a crosstab, or a driver.
+
+    Folders hold ``children``; a crosstab holds a ``spec``; a driver holds a
+    ``driver`` spec. ``version`` lets specs grow while older saves still load.
     """
 
     id: str
     name: str
-    kind: Literal["folder", "crosstab"]
+    kind: Literal["folder", "crosstab", "driver"]
     children: list["CrosstabNode"] = Field(default_factory=list)
     spec: SavedCrosstabSpec | None = None
+    driver: DriverSpec | None = None
     version: int = 1
 
 

@@ -14,6 +14,7 @@ from . import (
     compute,
     crosstab as crosstabbing,
     detect,
+    drivers as driving,
     export as exporting,
     filters as filtering,
     ingest,
@@ -37,6 +38,8 @@ from .models import (
     DatasetSummary,
     DistinctResponse,
     DistinctValue,
+    DriverResponse,
+    DriverSpec,
     ExportRequest,
     Filter,
     FilterCountResponse,
@@ -587,6 +590,16 @@ def crosstab(dataset_id: str, request: CrosstabRequest) -> CrosstabResponse:
         raise HTTPException(status_code=400, detail=str(err)) from err
 
 
+@app.post("/api/datasets/{dataset_id}/drivers", response_model=DriverResponse)
+def drivers(dataset_id: str, request: DriverSpec) -> DriverResponse:
+    """Compute a driver (relative importance) analysis for one outcome."""
+    meta, df = _load(dataset_id)
+    try:
+        return driving.compute_driver_analysis(df, meta, request)
+    except driving.DriverError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
 def _collect_node_ids(nodes: list[CrosstabNode], seen: set[str]) -> None:
     """Walk the crosstab tree, failing on duplicate ids or bad node shapes."""
     for node in nodes:
@@ -598,6 +611,10 @@ def _collect_node_ids(nodes: list[CrosstabNode], seen: set[str]) -> None:
         if node.kind == "crosstab" and node.spec is None:
             raise HTTPException(
                 status_code=400, detail=f"Crosstab '{node.name}' has no spec."
+            )
+        if node.kind == "driver" and node.driver is None:
+            raise HTTPException(
+                status_code=400, detail=f"Driver '{node.name}' has no spec."
             )
         _collect_node_ids(node.children, seen)
 

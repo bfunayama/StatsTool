@@ -1006,3 +1006,83 @@ button.danger:hover:not(:disabled) {
   margin: 0.3rem 0 0;
   padding-left: 1.2rem;
 }
+
+/* Driver (relative importance) analysis */
+.driver-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 560px;
+  padding: 0.5rem 0;
+}
+.driver-drivers {
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.driver-varlist {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-left: 1.2rem;
+}
+.driver-guidance {
+  margin: -0.4rem 0 0;
+  font-size: 0.85rem;
+}
+.driver-warnings {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: #9a3412;
+}
+.driver-results {
+  margin-top: 1rem;
+}
+.driver-table td.num,
+.driver-table th.num {
+  text-align: right;
+}
+.driver-bar-cell {
+  width: 40%;
+  min-width: 140px;
+}
+.driver-bar {
+  display: inline-block;
+  height: 0.8rem;
+  background: #2563eb;
+  border-radius: 2px;
+}
+.driver-bar.neg {
+  background: #c1121f;
+}
+.ct-node-tag {
+  font-size: 0.7rem;
+  background: #e0e7ff;
+  color: #3730a3;
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  margin-right: 0.35rem;
+}
+
+.driver-notes {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: #92700a;
+  font-size: 0.85rem;
+}
+.driver-grid-group {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px dashed #e2e6ec;
+}
+.driver-group-title {
+  font-weight: 600;
+}
+.driver-grid-item {
+  padding-left: 1.2rem;
+}
