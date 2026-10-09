@@ -1140,6 +1140,15 @@ tr.hidden-var > td {
   color: #92400e;
   background: #fffbeb;
 }
+.combine-warning {
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  margin: 0.25rem 0 0.5rem;
+  line-height: 1.4;
+}
 
 .combine-modes {
   display: flex;

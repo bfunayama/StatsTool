@@ -699,7 +699,8 @@ def delete_variable(dataset_id: str, name: str) -> DatasetMeta:
     """Delete a derived variable (raw imported columns cannot be deleted)."""
     meta, _ = _load(dataset_id)
     target = _require_variable(meta, name)
-    if target.source_name is None and target.type is not VariableType.weight:
+    is_raw_import = target.source_name is None and target.recode is None
+    if is_raw_import and target.type is not VariableType.weight:
         raise HTTPException(
             status_code=400, detail="Imported columns cannot be deleted."
         )
@@ -714,9 +715,43 @@ def delete_variable(dataset_id: str, name: str) -> DatasetMeta:
             status_code=400,
             detail=f"Used by other variables: {', '.join(dependents)}.",
         )
+    usages = _variable_usages(meta, name)
+    if usages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Used by {', '.join(usages)}. Remove or re-point them first.",
+        )
     meta.variables = [v for v in meta.variables if v.name != name]
     storage.save_meta(meta)
     return meta
+
+
+def _variable_usages(meta: DatasetMeta, name: str) -> list[str]:
+    """Saved tables/drivers/filters that reference a variable by name."""
+    uses: list[str] = []
+
+    def walk(nodes: list[CrosstabNode]) -> None:
+        for node in nodes:
+            spec = node.spec
+            if spec is not None and (
+                (spec.row.kind == "variable" and spec.row.ref == name)
+                or spec.column == name
+                or spec.weight == name
+                or any(name in seg.variables for seg in spec.banner)
+            ):
+                uses.append(f"table '{node.name}'")
+            drv = node.driver
+            if drv is not None and (
+                name in (drv.outcome, drv.weight) or name in drv.driver_variables
+            ):
+                uses.append(f"driver '{node.name}'")
+            walk(node.children)
+
+    walk(meta.crosstabs)
+    for filt in meta.filters:
+        if any(cond.variable == name for cond in filt.conditions):
+            uses.append(f"filter '{filt.name}'")
+    return uses
 
 
 @app.get(
@@ -871,7 +906,23 @@ def preview_dataset(
 def _load(dataset_id: str) -> tuple[DatasetMeta, pd.DataFrame]:
     if not storage.dataset_exists(dataset_id):
         raise HTTPException(status_code=404, detail="Dataset not found.")
-    return storage.load_meta(dataset_id), storage.load_data(dataset_id)
+    meta = storage.load_meta(dataset_id)
+    df = storage.load_data(dataset_id)
+    _prune_orphaned_questions(meta)
+    return meta, df
+
+
+def _prune_orphaned_questions(meta: DatasetMeta) -> None:
+    """Drop grouped questions whose member columns no longer exist (self-heal).
+
+    A leftover question pointing at deleted columns otherwise blocks every save.
+    """
+    names = {v.name for v in meta.variables}
+    kept = [q for q in meta.questions if all(it.column in names for it in q.items)]
+    if len(kept) != len(meta.questions):
+        meta.questions = kept
+        detect.apply_membership(meta.variables, meta.questions)
+
 
 
 def _require_variable(meta: DatasetMeta, name: str) -> Variable:

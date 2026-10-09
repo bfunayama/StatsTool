@@ -439,7 +439,7 @@ export function VariableEditor({ meta, onChanged }: Props) {
       {combineOpen && (
         <CombineDialog
           datasetId={meta.id}
-          candidates={variables.filter((v) => v.type !== 'weight')}
+          candidates={variables.filter((v) => v.type !== 'weight' && !v.hidden)}
           onClose={() => setCombineOpen(false)}
           onCreated={(m) => {
             setCombineOpen(false)
@@ -699,7 +699,9 @@ function VariableRow({
   onDelete,
   onToggleHidden,
 }: RowProps) {
-  const derived = variable.source_name !== null
+  // Combined (coalesce) variables have no source_name but are still derived.
+  const derived =
+    variable.source_name !== null || variable.recode?.kind === 'coalesce'
   const isNumeric = variable.type === 'numeric'
   const isCategorical = variable.type === 'categorical'
   const isText = variable.type === 'text'
@@ -774,11 +776,12 @@ function VariableRow({
                     Binary…
                   </button>
                 )}
-                {!derived && (isCategorical || isText) && (
-                  <button onClick={onPickAny} disabled={dirty} title={disabledTitle}>
-                    Pick Any…
-                  </button>
-                )}
+                {(!derived || variable.recode?.kind === 'coalesce') &&
+                  (isCategorical || isText) && (
+                    <button onClick={onPickAny} disabled={dirty} title={disabledTitle}>
+                      Pick Any…
+                    </button>
+                  )}
                 {derived && (
                   <button
                     onClick={onDelete}
@@ -1520,6 +1523,19 @@ function CombineDialog({
       )
     : candidates
   const nSources = preview?.sources.length ?? selected.length
+  // Merging pick-any (multi-select) option columns is a trap: coalesce keeps only
+  // the first ticked option per respondent and drops the rest.
+  const pickAnySelected = selected.filter(
+    (n) => candidates.find((v) => v.name === n)?.recode?.kind === 'compact_select',
+  ).length
+  const mergeWarning =
+    mode === 'merge' && selected.length >= 2
+      ? pickAnySelected >= 2
+        ? 'These look like pick-any (multi-select) option columns. Merge keeps only each respondent’s first ticked option and drops the rest — so most people collapse onto the first option. To compare a multi-select question across variants, build a combined pick-any instead, or use “Compare side by side”.'
+        : preview && preview.conflict_n >= Math.max(3, Math.ceil(preview.base_n * 0.2))
+          ? `${preview.conflict_n} respondents answered more than one source. Merge keeps only the first and drops the rest — if these aren’t mutually-exclusive variants, use “Compare side by side” instead.`
+          : null
+      : null
 
   return (
     <Modal title="Combine variables" onClose={onClose}>
@@ -1594,6 +1610,7 @@ function CombineDialog({
                 : `${preview.conflict_n} answered more than one (first ticked wins)`
               : 'no overlap between sources'}
           </p>
+          {mergeWarning && <p className="combine-warning">⚠ {mergeWarning}</p>}
           <label className="pickany-delim">
             {mode === 'grid' ? 'Question name' : 'Name'}
             <input

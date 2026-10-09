@@ -29,8 +29,10 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
   const [preview, setPreview] = useState<WeightPreview | null>(null)
   const backdrop = useBackdropDismiss()
 
-  // Variables you can weight on (not weights, not grouped-question members).
-  const weightable = variables.filter((v) => v.type !== 'weight' && !v.question_id)
+  // Variables you can weight on (not weights, not grouped-question members, not hidden).
+  const weightable = variables.filter(
+    (v) => v.type !== 'weight' && !v.question_id && !v.hidden,
+  )
   const labelFor = (name: string) =>
     variables.find((v) => v.name === name)?.label ?? name
 
