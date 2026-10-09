@@ -1086,3 +1086,17 @@ button.danger:hover:not(:disabled) {
 .driver-grid-item {
   padding-left: 1.2rem;
 }
+
+.driver-recommend {
+  margin: -0.4rem 0 0;
+  font-size: 0.85rem;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: #2563eb;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}

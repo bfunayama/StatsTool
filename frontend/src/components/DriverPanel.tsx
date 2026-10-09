@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   computeDrivers,
   type DatasetMeta,
@@ -17,17 +17,20 @@ interface Props {
 
 const METHOD_LABELS: Record<DriverSpec['method'], string> = {
   relative_weights: 'Relative weights (Johnson)',
-  shapley: 'Shapley / LMG (coming soon)',
-  ordered_logit: 'Ordered logit (coming soon)',
+  shapley: 'Shapley / LMG',
+  logit: 'Binary logit (relative weights)',
+  ordered_logit: 'Ordered logit (relative weights)',
 }
 
 const METHOD_GUIDANCE: Record<DriverSpec['method'], string> = {
   relative_weights:
     'Use a numeric outcome and numeric or binary drivers. Handles correlated drivers well.',
   shapley:
-    'Exact relative importance by averaging over predictor orderings — numeric outcome and drivers.',
+    'Exact relative importance by averaging over all predictor orderings (up to 12 drivers). Numeric outcome.',
+  logit:
+    'For a two-category outcome (e.g. aware / not aware). Importance comes from a weighted logistic model.',
   ordered_logit:
-    'For an ordinal (ranked categorical) outcome such as a 1–5 rating treated as categories.',
+    'For an ordered-scale outcome (e.g. a 1–5 rating). Importance comes from a proportional-odds model.',
 }
 
 export function defaultDriverSpec(): DriverSpec {
@@ -129,6 +132,9 @@ export function DriverPanel({
 
   const selectedDrivers = draft.driver_variables
   const outcomeVar = draft.outcome ? byName.get(draft.outcome) : undefined
+  const outcomeLevels = outcomeVar
+    ? (outcomeVar.values ?? []).filter((a) => !a.missing).length
+    : 0
 
   // Blocking errors.
   const errors: string[] = []
@@ -136,16 +142,38 @@ export function DriverPanel({
   if (selectedDrivers.length < 2) errors.push('Choose at least two drivers.')
   if (draft.outcome && selectedDrivers.includes(draft.outcome))
     errors.push('The outcome is also selected as a driver — remove it.')
+  if (draft.method === 'shapley' && selectedDrivers.length > 12)
+    errors.push(
+      `Shapley handles up to 12 drivers; you have ${selectedDrivers.length}. Use relative weights or remove some.`,
+    )
+  if (draft.method === 'logit' && outcomeVar && outcomeLevels > 2)
+    errors.push(
+      'Binary logit needs a two-category outcome — pick a binary variable or band this one to two categories.',
+    )
+  if (draft.method === 'ordered_logit' && outcomeVar && outcomeLevels > 0) {
+    if (outcomeLevels < 3)
+      errors.push(
+        'Ordered logit needs 3+ ordered categories — use binary logit for a two-category outcome.',
+      )
+    else if (outcomeLevels > 15)
+      errors.push(
+        'Ordered logit expects a short ordered scale; this outcome has too many categories. Use relative weights.',
+      )
+  }
 
   // Non-blocking guidance based on the chosen variable types.
   const notes: string[] = []
   if (outcomeVar && outcomeVar.type === 'categorical') {
-    const levels = (outcomeVar.values ?? []).filter((a) => !a.missing).length
-    notes.push(
-      levels <= 2
-        ? `Outcome “${outcomeVar.label}” is categorical — it is treated as a 0/1 outcome (a linear probability model). Binary logistic (coming soon) fits this better.`
-        : `Outcome “${outcomeVar.label}” is categorical with ${levels} levels — the analysis uses its numeric codes, which only makes sense for an ordered scale. For unordered categories use Ordered logit (coming soon).`,
-    )
+    if (outcomeLevels <= 2) {
+      if (draft.method !== 'logit')
+        notes.push(
+          `Outcome “${outcomeVar.label}” is categorical — it is treated as a 0/1 outcome (a linear probability model). Switch the method to Binary logit for a better fit.`,
+        )
+    } else {
+      notes.push(
+        `Outcome “${outcomeVar.label}” is categorical with ${outcomeLevels} levels — the analysis uses its numeric codes, which only makes sense for an ordered scale.`,
+      )
+    }
   }
   const nominalDrivers = selectedDrivers.filter((n) => {
     const v = byName.get(n)
@@ -157,7 +185,37 @@ export function DriverPanel({
       `${nominalDrivers.length} categorical driver${nominalDrivers.length === 1 ? ' is' : 's are'} used via numeric codes — fine for ordered scales, not for unordered categories.`,
     )
 
-  const canRun = errors.length === 0 && draft.method === 'relative_weights'
+  // Recommend a method from the chosen variable types.
+  let recommended: { method: DriverSpec['method']; why: string } | null = null
+  if (outcomeVar) {
+    const binary =
+      outcomeVar.type === 'binary' ||
+      (outcomeVar.type === 'categorical' && outcomeLevels === 2)
+    const ordinal =
+      outcomeVar.type === 'categorical' &&
+      outcomeLevels >= 3 &&
+      outcomeLevels <= 15
+    if (binary) {
+      recommended = { method: 'logit', why: 'your outcome has two categories' }
+    } else if (ordinal) {
+      recommended = {
+        method: 'ordered_logit',
+        why: `your outcome is an ordered scale with ${outcomeLevels} categories`,
+      }
+    } else if (selectedDrivers.length >= 2 && selectedDrivers.length <= 10) {
+      recommended = {
+        method: 'shapley',
+        why: 'a numeric outcome with a small set of drivers (exact importance)',
+      }
+    } else {
+      recommended = {
+        method: 'relative_weights',
+        why: 'a numeric outcome with many correlated drivers',
+      }
+    }
+  }
+
+  const canRun = errors.length === 0
 
   async function run() {
     setBusy(true)
@@ -170,6 +228,17 @@ export function DriverPanel({
       setBusy(false)
     }
   }
+
+  // Re-run the saved analysis when the panel opens so its output persists after
+  // switching to another table and back.
+  useEffect(() => {
+    const ok =
+      draft.outcome &&
+      draft.driver_variables.length >= 2 &&
+      !draft.driver_variables.includes(draft.outcome)
+    if (ok) run()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const maxPct = result
     ? Math.max(1, ...result.rows.map((r) => Math.abs(r.signed_pct)))
@@ -273,19 +342,33 @@ export function DriverPanel({
             }
           >
             {(
-              ['relative_weights', 'shapley', 'ordered_logit'] as const
+              ['relative_weights', 'shapley', 'logit', 'ordered_logit'] as const
             ).map((m) => (
-              <option
-                key={m}
-                value={m}
-                disabled={m !== 'relative_weights'}
-              >
+              <option key={m} value={m}>
                 {METHOD_LABELS[m]}
               </option>
             ))}
           </select>
         </label>
         <p className="muted driver-guidance">{METHOD_GUIDANCE[draft.method]}</p>
+        {recommended && recommended.method !== draft.method && (
+          <p className="driver-recommend">
+            Recommended: <strong>{METHOD_LABELS[recommended.method]}</strong> —{' '}
+            {recommended.why}.{' '}
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => patch({ method: recommended!.method })}
+            >
+              Use this
+            </button>
+          </p>
+        )}
+        {recommended && recommended.method === draft.method && (
+          <p className="muted driver-recommend">
+            ✓ A good fit for the variables you&apos;ve chosen.
+          </p>
+        )}
 
         <label className="field">
           Weight
@@ -392,7 +475,11 @@ export function DriverPanel({
           <p className="ct-caption">
             {METHOD_LABELS[result.method as DriverSpec['method']] ??
               result.method}
-            {' · '}R² = {result.r2.toFixed(3)}
+            {' · '}
+            {result.method === 'logit' || result.method === 'ordered_logit'
+              ? 'Pseudo-R²'
+              : 'R²'}{' '}
+            = {result.r2.toFixed(3)}
             {result.adj_r2 != null && ` (adj. ${result.adj_r2.toFixed(3)})`}
             {' · '}Filter: {result.filter_label ?? 'None'}
             {' · '}

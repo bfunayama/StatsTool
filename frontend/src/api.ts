@@ -270,7 +270,7 @@ export interface DriverSpec {
   driver_kind: 'question' | 'variables'
   driver_question: string
   driver_variables: string[]
-  method: 'relative_weights' | 'shapley' | 'ordered_logit'
+  method: 'relative_weights' | 'shapley' | 'logit' | 'ordered_logit'
   weight: string | null
   filter_id: string | null
   trim_outliers: boolean
@@ -606,9 +606,15 @@ export function saveCrosstabs(
 
 // Export tables to a single .xlsx workbook and trigger a download. Each sheet
 // holds one or more tables (stacked); the caller decides the grouping.
+export interface ExportTable {
+  name: string
+  spec?: SavedCrosstabSpec | null
+  driver?: DriverSpec | null
+}
+
 export async function exportXlsx(
   id: string,
-  sheets: { name: string; tables: { name: string; spec: SavedCrosstabSpec }[] }[],
+  sheets: { name: string; tables: ExportTable[] }[],
 ): Promise<void> {
   const res = await fetch(`/api/datasets/${id}/export/xlsx`, {
     method: 'POST',

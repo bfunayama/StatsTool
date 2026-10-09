@@ -571,7 +571,7 @@ class DriverSpec(BaseModel):
     driver_kind: Literal["question", "variables"] = "variables"
     driver_question: str = ""
     driver_variables: list[str] = Field(default_factory=list)
-    method: Literal["relative_weights", "shapley", "ordered_logit"] = (
+    method: Literal["relative_weights", "shapley", "logit", "ordered_logit"] = (
         "relative_weights"
     )
     weight: str | None = None
@@ -633,10 +633,11 @@ class CrosstabsUpdate(BaseModel):
 
 
 class ExportTable(BaseModel):
-    """One table to write to an Excel sheet: a display name and its spec."""
+    """One item to write to an Excel sheet: a crosstab ``spec`` or a ``driver``."""
 
     name: str
-    spec: SavedCrosstabSpec
+    spec: SavedCrosstabSpec | None = None
+    driver: DriverSpec | None = None
 
 
 class ExportSheet(BaseModel):

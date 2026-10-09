@@ -20,6 +20,7 @@ import {
   type CrosstabRowSpec,
   type DatasetMeta,
   type DriverSpec,
+  type ExportTable,
   type Filter,
   type SavedCrosstabSpec,
 } from '../api'
@@ -745,16 +746,21 @@ export function CrosstabView({ meta, onChanged }: Props) {
     const out: CrosstabNode[] = []
     for (const node of nodes) {
       if (node.kind === 'crosstab' && node.spec) out.push(node)
+      else if (node.kind === 'driver' && node.driver) out.push(node)
       out.push(...collectCrosstabNodes(node.children))
     }
     return out
   }
 
+  // A saved node becomes a crosstab table or a driver table for export.
+  function nodeToTable(n: CrosstabNode): ExportTable {
+    return n.kind === 'driver'
+      ? { name: n.name, driver: n.driver }
+      : { name: n.name, spec: n.spec }
+  }
+
   async function doExport(
-    sheets: {
-      name: string
-      tables: { name: string; spec: SavedCrosstabSpec }[]
-    }[],
+    sheets: { name: string; tables: ExportTable[] }[],
   ) {
     if (!sheets.some((s) => s.tables.length > 0)) {
       setTreeError('No tables to export.')
@@ -773,16 +779,16 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   // Group tables into one sheet per folder (plus "Top level"), tree order.
   function sheetsByFolder(include: (id: string) => boolean) {
-    const groups = new Map<
-      string,
-      { name: string; spec: SavedCrosstabSpec }[]
-    >()
+    const groups = new Map<string, ExportTable[]>()
     const walk = (nodes: CrosstabNode[], folder: string) => {
       for (const n of nodes) {
         if (n.kind === 'folder') walk(n.children, n.name)
-        else if (n.spec && include(n.id)) {
+        else if (
+          (n.spec || n.driver) &&
+          include(n.id)
+        ) {
           const arr = groups.get(folder) ?? []
-          arr.push({ name: n.name, spec: n.spec })
+          arr.push(nodeToTable(n))
           groups.set(folder, arr)
         }
       }
@@ -803,7 +809,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     }
     const tables = collectCrosstabNodes(tree)
       .filter((n) => include(n.id))
-      .map((n) => ({ name: n.name, spec: n.spec! }))
+      .map(nodeToTable)
     doExport(
       layout === 'single'
         ? [{ name: 'Tables', tables }]

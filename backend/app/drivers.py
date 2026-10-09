@@ -12,6 +12,9 @@ driver set can be a grid question's items or a hand-picked set of variables.
 
 from __future__ import annotations
 
+import itertools
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -34,9 +37,6 @@ class DriverError(ValueError):
 def compute_driver_analysis(
     df: pd.DataFrame, meta: DatasetMeta, spec: DriverSpec
 ) -> DriverResponse:
-    if spec.method != "relative_weights":
-        raise DriverError("That method is not available yet.")
-
     index = compute.build_index(meta.variables)
 
     filter_label = None
@@ -108,8 +108,47 @@ def compute_driver_analysis(
 
     rxx = cxx / np.outer(sd, sd)
     rxy = cxy / (sd * sdy)
+    beta_std = np.linalg.pinv(rxx) @ rxy  # standardised OLS betas (reference column)
 
-    importance, r2, beta_std = _relative_weights(rxx, rxy)
+    pseudo = False  # logit reports McFadden pseudo-R² rather than R²
+    if spec.method == "relative_weights":
+        importance, r2, _ = _relative_weights(rxx, rxy)
+    elif spec.method == "shapley":
+        if p > _SHAPLEY_MAX:
+            raise DriverError(
+                f"Shapley is limited to {_SHAPLEY_MAX} drivers (you have {p}). "
+                "Use relative weights, or reduce the number of drivers."
+            )
+        importance, r2 = _shapley(rxx, rxy)
+    elif spec.method == "logit":
+        uniq = np.unique(yv)
+        if uniq.size != 2:
+            raise DriverError(
+                "Binary logit needs an outcome with exactly two values. Recode "
+                "the outcome to two categories, or use relative weights / Shapley."
+            )
+        y01 = (yv == uniq.max()).astype(float)
+        importance, r2 = _logit_relative_weights(rxx, dX / sd, y01, w)
+        pseudo = True
+    elif spec.method == "ordered_logit":
+        uniq = np.unique(yv)
+        if uniq.size < 3:
+            raise DriverError(
+                "Ordered logit needs an outcome with 3+ ordered categories. "
+                "Use binary logit for a two-category outcome."
+            )
+        if uniq.size > _ORDLOGIT_MAX_LEVELS:
+            raise DriverError(
+                f"Ordered logit expects a short ordered scale; this outcome has "
+                f"{uniq.size} values. Use relative weights for a continuous outcome."
+            )
+        ranks = {v: i for i, v in enumerate(np.sort(uniq))}
+        y_ord = np.array([ranks[v] for v in yv])
+        importance, r2 = _ordlogit_relative_weights(rxx, dX / sd, y_ord, w)
+        pseudo = True
+    else:
+        raise DriverError("Unknown driver method.")
+
     total = float(importance.sum())
     pct = importance / total * 100.0 if total > 0 else np.zeros_like(importance)
     signs = np.sign(rxy)
@@ -130,7 +169,7 @@ def compute_driver_analysis(
     rows.sort(key=lambda r: r.importance_pct, reverse=True)
 
     adj_r2 = None
-    if n - p - 1 > 0:
+    if not pseudo and n - p - 1 > 0:
         adj_r2 = 1.0 - (1.0 - r2) * (n - 1) / (n - p - 1)
     eff = compute.effective_n(frame["_w"]) if weighted else float(n)
 
@@ -209,3 +248,203 @@ def _relative_weights(
     r2 = float(np.clip(importance.sum(), 0.0, 1.0))
     beta_std = np.linalg.pinv(rxx) @ rxy  # ordinary standardised regression betas
     return importance, r2, beta_std
+
+
+# Shapley sums over 2^k subsets, so cap the predictor count to stay responsive.
+_SHAPLEY_MAX = 12
+
+
+def _subset_r2(rxx: np.ndarray, rxy: np.ndarray, idx: tuple[int, ...]) -> float:
+    """R² of regressing the outcome on the predictors in ``idx`` (from corr matrix)."""
+    if not idx:
+        return 0.0
+    sub = rxx[np.ix_(idx, idx)]
+    v = rxy[list(idx)]
+    return float(v @ np.linalg.pinv(sub) @ v)
+
+
+def _shapley(rxx: np.ndarray, rxy: np.ndarray) -> tuple[np.ndarray, float]:
+    """Shapley value regression (LMG): average marginal R² over all orderings."""
+    k = len(rxy)
+    cache: dict[frozenset[int], float] = {}
+
+    def r2(members: frozenset[int]) -> float:
+        if members not in cache:
+            cache[members] = _subset_r2(rxx, rxy, tuple(sorted(members)))
+        return cache[members]
+
+    lmg = np.zeros(k)
+    for j in range(k):
+        others = [i for i in range(k) if i != j]
+        acc = 0.0
+        for size in range(len(others) + 1):
+            weight = (
+                math.factorial(size)
+                * math.factorial(k - size - 1)
+                / math.factorial(k)
+            )
+            for combo in itertools.combinations(others, size):
+                s = frozenset(combo)
+                acc += weight * (r2(s | {j}) - r2(s))
+        lmg[j] = acc
+    return lmg, float(np.clip(lmg.sum(), 0.0, 1.0))
+
+
+def _irls_logit(
+    z: np.ndarray, y: np.ndarray, w: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """Weighted logistic regression by IRLS; returns betas + McFadden pseudo-R²."""
+    n, k = z.shape
+    design = np.column_stack([np.ones(n), z])
+    beta = np.zeros(k + 1)
+    for _ in range(100):
+        eta = np.clip(design @ beta, -30, 30)
+        p = np.clip(1.0 / (1.0 + np.exp(-eta)), 1e-9, 1 - 1e-9)
+        grad = design.T @ (w * (y - p))
+        hess = design.T @ (design * (w * p * (1 - p))[:, None])
+        step = np.linalg.pinv(hess) @ grad
+        beta = beta + step
+        if np.max(np.abs(step)) < 1e-8:
+            break
+    eta = np.clip(design @ beta, -30, 30)
+    p = np.clip(1.0 / (1.0 + np.exp(-eta)), 1e-9, 1 - 1e-9)
+    ll = float((w * (y * np.log(p) + (1 - y) * np.log(1 - p))).sum())
+    pbar = min(max(float((w * y).sum() / w.sum()), 1e-9), 1 - 1e-9)
+    ll0 = float((w * (y * np.log(pbar) + (1 - y) * np.log(1 - pbar))).sum())
+    pseudo = 1.0 - ll / ll0 if ll0 != 0 else 0.0
+    return beta, max(pseudo, 0.0)
+
+
+def _logit_relative_weights(
+    rxx: np.ndarray, x_std: np.ndarray, y01: np.ndarray, w: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """Relative weights for a binary outcome (Tonidandel & LeBreton).
+
+    Orthogonalise the predictors, fit weighted logistic regression on them, then
+    split the model's pseudo-R² across the original predictors.
+    """
+    evals, vecs = np.linalg.eigh(rxx)
+    evals = np.clip(evals, 1e-12, None)
+    root = vecs @ np.diag(np.sqrt(evals)) @ vecs.T
+    root_inv = vecs @ np.diag(1.0 / np.sqrt(evals)) @ vecs.T
+    z = x_std @ root_inv  # near-orthonormal predictors
+    beta, pseudo_r2 = _irls_logit(z, y01, w)
+    eps = (root**2) @ (beta[1:] ** 2)  # exclude the intercept
+    total = float(eps.sum())
+    if total > 0:
+        eps = eps / total * pseudo_r2  # scale raw weights to the pseudo-R²
+    return eps, pseudo_r2
+
+
+# Ordered logit expects a short ordered scale, not a near-continuous variable.
+_ORDLOGIT_MAX_LEVELS = 15
+
+
+def _ordered_logit(
+    z: np.ndarray, y: np.ndarray, w: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """Proportional-odds ordered logit by Newton's method (weighted MLE).
+
+    ``y`` is coded 0..K-1. Thresholds use an exp-increment parameterisation so
+    they stay ordered. Returns the predictor slopes β and McFadden pseudo-R².
+    """
+    n, p = z.shape
+    k = int(y.max()) + 1
+    m = k - 1  # number of thresholds
+
+    counts = np.array([w[y == j].sum() for j in range(k)], dtype=float)
+    props = np.clip(counts / counts.sum(), 1e-9, 1.0)
+    cum = np.clip(np.cumsum(props)[:-1], 1e-6, 1 - 1e-6)
+    alpha0 = np.log(cum / (1 - cum))
+    theta = np.concatenate(
+        [
+            [alpha0[0]],
+            np.log(np.clip(np.diff(alpha0), 1e-3, None)) if m > 1 else [],
+            np.zeros(p),
+        ]
+    )
+    idx = np.arange(n)
+
+    def thresholds(t: np.ndarray) -> np.ndarray:
+        if m == 1:
+            return t[:1]
+        return t[0] + np.concatenate([[0.0], np.cumsum(np.exp(t[1:m]))])
+
+    def loglik(t: np.ndarray) -> float:
+        alpha = thresholds(t)
+        eta = z @ t[m:]
+        s = 1.0 / (1.0 + np.exp(-np.clip(alpha[None, :] - eta[:, None], -30, 30)))
+        a = np.concatenate([np.zeros((n, 1)), s, np.ones((n, 1))], axis=1)
+        prob = np.clip(a[idx, y + 1] - a[idx, y], 1e-12, 1.0)
+        return float((w * np.log(prob)).sum())
+
+    def grad(t: np.ndarray) -> np.ndarray:
+        alpha = thresholds(t)
+        beta = t[m:]
+        eta = z @ beta
+        s = 1.0 / (1.0 + np.exp(-np.clip(alpha[None, :] - eta[:, None], -30, 30)))
+        a = np.concatenate([np.zeros((n, 1)), s, np.ones((n, 1))], axis=1)
+        prob = np.clip(a[idx, y + 1] - a[idx, y], 1e-12, 1.0)
+        g = s * (1 - s)  # σ' at each threshold
+        d_alpha = np.zeros((n, m))
+        up = y < m  # observation uses an upper threshold (not the top category)
+        d_alpha[idx[up], y[up]] += g[idx[up], y[up]] / prob[up]
+        lo = y > 0  # observation uses a lower threshold (not the bottom category)
+        d_alpha[idx[lo], y[lo] - 1] -= g[idx[lo], y[lo] - 1] / prob[lo]
+        d_alpha *= w[:, None]
+        grad_alpha = d_alpha.sum(axis=0)
+        g_up = np.where(up, g[idx, np.clip(y, 0, m - 1)], 0.0)
+        g_lo = np.where(lo, g[idx, np.clip(y - 1, 0, m - 1)], 0.0)
+        d_eta = (-g_up + g_lo) / prob
+        grad_beta = (z * (w * d_eta)[:, None]).sum(axis=0)
+        grad_t0 = grad_alpha.sum()
+        if m > 1:
+            grad_d = np.array(
+                [np.exp(t[1 + i]) * grad_alpha[i + 1 :].sum() for i in range(m - 1)]
+            )
+        else:
+            grad_d = np.array([])
+        return np.concatenate([[grad_t0], grad_d, grad_beta])
+
+    ll = loglik(theta)
+    for _ in range(100):
+        g0 = grad(theta)
+        hess = np.zeros((theta.size, theta.size))
+        for col in range(theta.size):
+            bumped = theta.copy()
+            bumped[col] += 1e-5
+            hess[:, col] = (grad(bumped) - g0) / 1e-5
+        hess = 0.5 * (hess + hess.T)
+        step = -np.linalg.pinv(hess - 1e-6 * np.eye(theta.size)) @ g0
+        scale = 1.0
+        for _bt in range(30):
+            cand = theta + scale * step
+            if loglik(cand) >= ll:
+                theta, ll = cand, loglik(cand)
+                break
+            scale *= 0.5
+        else:
+            break
+        if np.max(np.abs(scale * step)) < 1e-7:
+            break
+
+    ll0 = float((w * np.log(props[y])).sum())  # intercept-only (base rates)
+    pseudo = 1.0 - ll / ll0 if ll0 != 0 else 0.0
+    return theta[m:], max(pseudo, 0.0)
+
+
+def _ordlogit_relative_weights(
+    rxx: np.ndarray, x_std: np.ndarray, y_ord: np.ndarray, w: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """Relative weights for an ordinal outcome via proportional-odds ordered logit."""
+    evals, vecs = np.linalg.eigh(rxx)
+    evals = np.clip(evals, 1e-12, None)
+    root = vecs @ np.diag(np.sqrt(evals)) @ vecs.T
+    root_inv = vecs @ np.diag(1.0 / np.sqrt(evals)) @ vecs.T
+    z = x_std @ root_inv
+    beta, pseudo_r2 = _ordered_logit(z, y_ord, w)
+    eps = (root**2) @ (beta**2)
+    total = float(eps.sum())
+    if total > 0:
+        eps = eps / total * pseudo_r2
+    return eps, pseudo_r2

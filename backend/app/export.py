@@ -13,13 +13,22 @@ import io
 import pandas as pd
 
 from . import crosstab as crosstabbing
+from . import drivers as driving
 from .models import (
     CrosstabRequest,
     CrosstabResponse,
     DatasetMeta,
+    DriverResponse,
     ExportSheet,
     SavedCrosstabSpec,
 )
+
+_METHOD_LABELS = {
+    "relative_weights": "Relative weights (Johnson)",
+    "shapley": "Shapley / LMG",
+    "logit": "Binary logit (relative weights)",
+    "ordered_logit": "Ordered logit (relative weights)",
+}
 
 CATSEP = "\u0001"
 
@@ -98,14 +107,22 @@ def build_workbook(
                 cell = ws.cell(r, 1, table.name)
                 cell.font = _bold()
                 r += 1
-            try:
-                result = crosstabbing.compute_crosstab(
-                    df, meta, _request_from_spec(table.spec)
-                )
-                r = _render_table(ws, meta, table.spec, result, r)
-            except crosstabbing.CrosstabError as err:
-                ws.cell(r, 1, f"Could not build this table: {err}")
-                r += 1
+            if table.driver is not None:
+                try:
+                    dres = driving.compute_driver_analysis(df, meta, table.driver)
+                    r = _render_driver(ws, dres, r)
+                except driving.DriverError as err:
+                    ws.cell(r, 1, f"Could not build this analysis: {err}")
+                    r += 1
+            elif table.spec is not None:
+                try:
+                    result = crosstabbing.compute_crosstab(
+                        df, meta, _request_from_spec(table.spec)
+                    )
+                    r = _render_table(ws, meta, table.spec, result, r)
+                except crosstabbing.CrosstabError as err:
+                    ws.cell(r, 1, f"Could not build this table: {err}")
+                    r += 1
             r += 3  # three blank rows between stacked tables
     if not wb.sheetnames:
         wb.create_sheet(title="Empty")
@@ -118,6 +135,49 @@ def _bold():
     from openpyxl.styles import Font
 
     return Font(bold=True)
+
+
+def _render_driver(ws, result: DriverResponse, start_row: int) -> int:
+    """Write a driver analysis: a header, ranked driver rows, and a fit footer."""
+    from openpyxl.styles import Alignment
+
+    r = start_row
+    headers = ["Driver", "Importance %", "Correlation", "Beta", "Mean"]
+    for col, text in enumerate(headers, start=1):
+        c = ws.cell(r, col, text)
+        c.font = _bold()
+        if col > 1:
+            c.alignment = Alignment(horizontal="right")
+    r += 1
+    for row in result.rows:
+        ws.cell(r, 1, row.label)
+        pct = ws.cell(r, 2, round(row.signed_pct / 100.0, 4))
+        pct.number_format = '0.0"%"'
+        ws.cell(r, 3, round(row.correlation, 3))
+        ws.cell(r, 4, round(row.beta, 3))
+        if row.mean is not None:
+            ws.cell(r, 5, round(row.mean, 3))
+        r += 1
+    r += 1
+    r2_label = "Pseudo-R²" if result.method in ("logit", "ordered_logit") else "R²"
+    caption = (
+        f"{_METHOD_LABELS.get(result.method, result.method)} · "
+        f"{r2_label} = {result.r2:.3f}"
+    )
+    if result.adj_r2 is not None:
+        caption += f" (adj. {result.adj_r2:.3f})"
+    caption += f" · Filter: {result.filter_label or 'None'}"
+    caption += (
+        f" · Weighted – {result.weight_label}" if result.weighted else " · Unweighted"
+    )
+    caption += f" · Base n = {result.base_n}"
+    if result.weighted and result.eff_base_n is not None:
+        caption += f" · Effective n = {round(result.eff_base_n)}"
+    if result.trimmed > 0:
+        caption += f" · {result.trimmed} outliers removed"
+    ws.cell(r, 1, caption)
+    ws.column_dimensions["A"].width = 48
+    return r + 1
 
 
 def _render_table(
