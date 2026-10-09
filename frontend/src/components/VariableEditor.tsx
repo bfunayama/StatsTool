@@ -3,14 +3,20 @@ import { WeightDialog } from './WeightDialog'
 import {
   bandVariable,
   binaryVariable,
+  coalesceVariable,
   copyVariable,
   deleteVariable,
   getDistinct,
+  pickAnyCompact,
+  previewCoalesce,
+  previewPickAnyCompact,
   saveQuestions,
   updateVariables,
   type Band,
+  type CoalescePreview,
   type DatasetMeta,
   type DistinctValue,
+  type PickAnyCompactPreview,
   type Question,
   type QuestionKind,
   type Recode,
@@ -59,6 +65,14 @@ export function VariableEditor({ meta, onChanged }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [bandFor, setBandFor] = useState<Variable | null>(null)
   const [binaryFor, setBinaryFor] = useState<Variable | null>(null)
+  const [pickAnyFor, setPickAnyFor] = useState<Variable | null>(null)
+  const [combineOpen, setCombineOpen] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string
+    message: string
+    confirmLabel?: string
+    onConfirm: () => void
+  } | null>(null)
   const [weightDialog, setWeightDialog] = useState<{ initial: Variable | null } | null>(
     null,
   )
@@ -209,12 +223,50 @@ export function VariableEditor({ meta, onChanged }: Props) {
   }
 
   function ungroupQuestion(id: string) {
-    if (
-      !confirm('Ungroup this question? Its columns return to the variable list.')
+    setConfirmAction({
+      title: 'Ungroup question',
+      message:
+        'Ungroup this question? Its columns return to the variable list.',
+      confirmLabel: 'Ungroup',
+      onConfirm: () => {
+        setQuestions((prev) => prev.filter((q) => q.id !== id))
+        setDirty(true)
+      },
+    })
+  }
+
+  // A question whose every column is a derived variable (e.g. a compact
+  // pick-any) can be deleted outright; raw-column groups can only be ungrouped.
+  function questionIsDerived(q: Question) {
+    return (
+      q.items.length > 0 &&
+      q.items.every((it) => {
+        const mv = variables.find((v) => v.name === it.column)
+        return mv != null && mv.source_name != null
+      })
     )
-      return
-    setQuestions((prev) => prev.filter((q) => q.id !== id))
-    setDirty(true)
+  }
+
+  function deleteQuestion(q: Question) {
+    setConfirmAction({
+      title: 'Delete pick-any question',
+      message: `Delete "${q.label}" and its ${q.items.length} derived columns? The original column is kept (unhidden).`,
+      onConfirm: () => {
+        const memberCols = new Set(q.items.map((i) => i.column))
+        const sources = new Set<string>()
+        for (const it of q.items) {
+          const mv = variables.find((v) => v.name === it.column)
+          if (mv?.source_name) sources.add(mv.source_name)
+        }
+        setVariables((prev) =>
+          prev
+            .filter((v) => !memberCols.has(v.name))
+            .map((v) => (sources.has(v.name) ? { ...v, hidden: false } : v)),
+        )
+        setQuestions((prev) => prev.filter((x) => x.id !== q.id))
+        setDirty(true)
+      },
+    })
   }
 
   async function save() {
@@ -254,6 +306,13 @@ export function VariableEditor({ meta, onChanged }: Props) {
         </span>
         <span className="spacer" />
         {dirty && <span className="muted">Unsaved changes</span>}
+        <button
+          onClick={() => setCombineOpen(true)}
+          disabled={dirty}
+          title={dirty ? 'Save changes first' : undefined}
+        >
+          Combine variables…
+        </button>
         <button onClick={() => setWeightDialog({ initial: null })}>
           New weight
         </button>
@@ -301,6 +360,9 @@ export function VariableEditor({ meta, onChanged }: Props) {
                     }
                     onRemoveItem={(column) => removeQuestionItem(q.id, column)}
                     onUngroup={() => ungroupQuestion(q.id)}
+                    onDelete={
+                      questionIsDerived(q) ? () => deleteQuestion(q) : undefined
+                    }
                   />
                 )
               }
@@ -321,11 +383,16 @@ export function VariableEditor({ meta, onChanged }: Props) {
                   onCopy={() => run(() => copyVariable(meta.id, v.name))}
                   onBand={() => setBandFor(v)}
                   onBinary={() => setBinaryFor(v)}
+                  onPickAny={() => setPickAnyFor(v)}
                   onEditWeight={() => setWeightDialog({ initial: v })}
-                  onDelete={() => {
-                    if (confirm(`Delete variable "${v.label}"?`))
-                      run(() => deleteVariable(meta.id, v.name))
-                  }}
+                  onDelete={() =>
+                    setConfirmAction({
+                      title: 'Delete variable',
+                      message: `Delete variable "${v.label}"?`,
+                      onConfirm: () =>
+                        run(() => deleteVariable(meta.id, v.name)),
+                    })
+                  }
                   onToggleHidden={() =>
                     patchVariable(v.name, { hidden: !v.hidden })
                   }
@@ -358,6 +425,45 @@ export function VariableEditor({ meta, onChanged }: Props) {
           }}
         />
       )}
+      {pickAnyFor && (
+        <PickAnyCompactDialog
+          datasetId={meta.id}
+          variable={pickAnyFor}
+          onClose={() => setPickAnyFor(null)}
+          onCreated={(m) => {
+            setPickAnyFor(null)
+            onChanged(m)
+          }}
+        />
+      )}
+      {combineOpen && (
+        <CombineDialog
+          datasetId={meta.id}
+          candidates={variables.filter((v) => v.type !== 'weight')}
+          onClose={() => setCombineOpen(false)}
+          onCreated={(m) => {
+            setCombineOpen(false)
+            onChanged(m)
+          }}
+        />
+      )}
+      {confirmAction && (
+        <Modal title={confirmAction.title} onClose={() => setConfirmAction(null)}>
+          <p className="muted">{confirmAction.message}</p>
+          <div className="modal-actions">
+            <button onClick={() => setConfirmAction(null)}>Cancel</button>
+            <button
+              className="danger"
+              onClick={() => {
+                confirmAction.onConfirm()
+                setConfirmAction(null)
+              }}
+            >
+              {confirmAction.confirmLabel ?? 'Delete'}
+            </button>
+          </div>
+        </Modal>
+      )}
       {weightDialog && (
         <WeightDialog
           datasetId={meta.id}
@@ -387,6 +493,7 @@ interface RowProps {
   onCopy: () => void
   onBand: () => void
   onBinary: () => void
+  onPickAny: () => void
   onEditWeight: () => void
   onDelete: () => void
   onToggleHidden: () => void
@@ -402,6 +509,7 @@ function QuestionRow({
   onAxisLabel,
   onRemoveItem,
   onUngroup,
+  onDelete,
 }: {
   question: Question
   isOpen: boolean
@@ -412,6 +520,7 @@ function QuestionRow({
   onAxisLabel: (axis: 'rows' | 'columns', key: string, label: string) => void
   onRemoveItem: (column: string) => void
   onUngroup: () => void
+  onDelete?: () => void
 }) {
   return (
     <>
@@ -445,9 +554,12 @@ function QuestionRow({
         <td>
           <div className="row-actions">
             <span className="muted">{question.items.length} cols</span>
-            <button className="danger" onClick={onUngroup}>
-              Ungroup
-            </button>
+            <button onClick={onUngroup}>Ungroup</button>
+            {onDelete && (
+              <button className="danger" onClick={onDelete}>
+                Delete
+              </button>
+            )}
           </div>
         </td>
       </tr>
@@ -582,6 +694,7 @@ function VariableRow({
   onCopy,
   onBand,
   onBinary,
+  onPickAny,
   onEditWeight,
   onDelete,
   onToggleHidden,
@@ -589,6 +702,7 @@ function VariableRow({
   const derived = variable.source_name !== null
   const isNumeric = variable.type === 'numeric'
   const isCategorical = variable.type === 'categorical'
+  const isText = variable.type === 'text'
   const isWeight = variable.type === 'weight'
   const disabledTitle = dirty ? 'Save changes first' : undefined
 
@@ -660,6 +774,11 @@ function VariableRow({
                     Binary…
                   </button>
                 )}
+                {!derived && (isCategorical || isText) && (
+                  <button onClick={onPickAny} disabled={dirty} title={disabledTitle}>
+                    Pick Any…
+                  </button>
+                )}
                 {derived && (
                   <button
                     onClick={onDelete}
@@ -687,13 +806,17 @@ function VariableRow({
               )
             ) : variable.recode.kind === 'band' ? (
               <BandInlineEditor recode={variable.recode} onRecode={onRecode} />
-            ) : (
+            ) : variable.recode.kind === 'binary' ? (
               <BinaryInlineEditor
                 datasetId={datasetId}
                 sourceName={variable.source_name}
                 recode={variable.recode}
                 onRecode={onRecode}
               />
+            ) : variable.values.length > 0 ? (
+              <ValueAttributesEditor variable={variable} onValuePatch={onValuePatch} />
+            ) : (
+              <RawValuesView datasetId={datasetId} variableName={variable.name} />
             )}
           </td>
         </tr>
@@ -1206,6 +1329,320 @@ function BinaryDialog({
         <button onClick={onClose}>Cancel</button>
         <button className="primary" onClick={create} disabled={busy}>
           {busy ? 'Creating…' : 'Create binary variable'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+function PickAnyCompactDialog({
+  datasetId,
+  variable,
+  onClose,
+  onCreated,
+}: {
+  datasetId: string
+  variable: Variable
+  onClose: () => void
+  onCreated: (meta: DatasetMeta) => void
+}) {
+  const DELIMITERS: { value: string; label: string }[] = [
+    { value: '|', label: 'Pipe  |' },
+    { value: ';', label: 'Semicolon  ;' },
+    { value: ',', label: 'Comma  ,' },
+  ]
+  const [delimiter, setDelimiter] = useState<string | null>(null)
+  const [preview, setPreview] = useState<PickAnyCompactPreview | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    previewPickAnyCompact(datasetId, variable.name, delimiter)
+      .then((p) => {
+        if (!active) return
+        setPreview(p)
+        if (delimiter === null && p.delimiter) setDelimiter(p.delimiter)
+      })
+      .catch((err) =>
+        active && setError(err instanceof Error ? err.message : 'Preview failed'),
+      )
+      .finally(() => active && setLoading(false))
+    return () => {
+      active = false
+    }
+  }, [datasetId, variable.name, delimiter])
+
+  async function create() {
+    setBusy(true)
+    setError(null)
+    try {
+      onCreated(await pickAnyCompact(datasetId, variable.name, delimiter))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create pick-any')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const options = preview?.options ?? []
+  const noneFound = !loading && preview?.delimiter == null && delimiter == null
+
+  return (
+    <Modal title={`Split "${variable.label}" into Pick Any`} onClose={onClose}>
+      <p className="muted">
+        Each respondent&apos;s selected answers are packed into one cell. This
+        keeps the original column and creates a multi-response question you can
+        crosstab, NET and export.
+      </p>
+      <label className="pickany-delim">
+        Separator
+        <select
+          value={delimiter ?? ''}
+          onChange={(e) => setDelimiter(e.target.value || null)}
+        >
+          <option value="">Auto-detect</option>
+          {DELIMITERS.map((d) => (
+            <option key={d.value} value={d.value}>
+              {d.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {loading ? (
+        <p className="muted">Scanning answers…</p>
+      ) : noneFound ? (
+        <p className="muted">
+          No multi-answer separator found. Pick a separator above to split on.
+        </p>
+      ) : (
+        <>
+          <p className="muted">
+            {options.length} options · {preview?.respondents ?? 0} answered ·{' '}
+            {preview?.multi_selected ?? 0} chose more than one
+          </p>
+          <div className="checkbox-list">
+            {options.map((o) => (
+              <div key={o.label} className="pickany-opt">
+                {o.label} <span className="muted">({o.count})</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {error && <p className="error">{error}</p>}
+      <div className="modal-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button
+          className="primary"
+          onClick={create}
+          disabled={busy || loading || options.length === 0}
+        >
+          {busy ? 'Creating…' : 'Create pick-any question'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+function CombineDialog({
+  datasetId,
+  candidates,
+  onClose,
+  onCreated,
+}: {
+  datasetId: string
+  candidates: Variable[]
+  onClose: () => void
+  onCreated: (meta: DatasetMeta) => void
+}) {
+  const [selected, setSelected] = useState<string[]>([])
+  const [search, setSearch] = useState('')
+  const [mode, setMode] = useState<'merge' | 'grid'>('merge')
+  const [label, setLabel] = useState('')
+  const [labelEdited, setLabelEdited] = useState(false)
+  const [preview, setPreview] = useState<CoalescePreview | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (selected.length < 2) {
+      setPreview(null)
+      return
+    }
+    let active = true
+    setLoading(true)
+    previewCoalesce(datasetId, selected)
+      .then((p) => {
+        if (!active) return
+        setPreview(p)
+        if (!labelEdited) setLabel(p.suggested_label)
+      })
+      .catch((err) =>
+        active && setError(err instanceof Error ? err.message : 'Preview failed'),
+      )
+      .finally(() => active && setLoading(false))
+    return () => {
+      active = false
+    }
+  }, [datasetId, selected, labelEdited])
+
+  function toggle(name: string) {
+    setError(null)
+    setSelected((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
+    )
+  }
+
+  async function create() {
+    setBusy(true)
+    setError(null)
+    try {
+      onCreated(
+        await coalesceVariable(datasetId, selected, label || undefined, mode),
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to combine')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const term = search.trim().toLowerCase()
+  const filtered = term
+    ? candidates.filter(
+        (v) =>
+          v.label.toLowerCase().includes(term) ||
+          v.name.toLowerCase().includes(term),
+      )
+    : candidates
+  const nSources = preview?.sources.length ?? selected.length
+
+  return (
+    <Modal title="Combine variables" onClose={onClose}>
+      <p className="muted">
+        Combine parallel columns — e.g. the same question asked under different
+        variants that came out in separate columns.
+      </p>
+      <div className="combine-modes">
+        <label className="combine-mode">
+          <input
+            type="radio"
+            checked={mode === 'merge'}
+            onChange={() => setMode('merge')}
+          />
+          <span>
+            <strong>Merge into one variable</strong>
+            <span className="muted">
+              {' '}— each respondent keeps the first answer they gave (in tick
+              order). Best for between-subjects variants (one answer per person).
+            </span>
+          </span>
+        </label>
+        <label className="combine-mode">
+          <input
+            type="radio"
+            checked={mode === 'grid'}
+            onChange={() => setMode('grid')}
+          />
+          <span>
+            <strong>Compare side by side</strong>
+            <span className="muted">
+              {' '}— keeps each column as its own row in a comparison grid, each
+              counted on its own base. For within-subjects variants, where a
+              respondent may have answered more than one, every answer is counted.
+            </span>
+          </span>
+        </label>
+      </div>
+      <input
+        className="search"
+        placeholder="Filter variables…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div className="checkbox-list">
+        {filtered.map((v) => {
+          const pos = selected.indexOf(v.name)
+          return (
+            <label key={v.name} className="checkbox-item">
+              <input
+                type="checkbox"
+                checked={pos >= 0}
+                onChange={() => toggle(v.name)}
+              />
+              {pos >= 0 && <span className="combine-order">{pos + 1}</span>}
+              {v.label} <span className="muted">({v.type})</span>
+            </label>
+          )
+        })}
+      </div>
+      {selected.length < 2 ? (
+        <p className="muted">Tick at least two variables to combine.</p>
+      ) : loading ? (
+        <p className="muted">Checking…</p>
+      ) : preview ? (
+        <>
+          <p className="muted">
+            {preview.base_n} answered ·{' '}
+            {preview.conflict_n > 0
+              ? mode === 'grid'
+                ? `${preview.conflict_n} answered more than one (counted under each)`
+                : `${preview.conflict_n} answered more than one (first ticked wins)`
+              : 'no overlap between sources'}
+          </p>
+          <label className="pickany-delim">
+            {mode === 'grid' ? 'Question name' : 'Name'}
+            <input
+              value={label}
+              onChange={(e) => {
+                setLabel(e.target.value)
+                setLabelEdited(true)
+              }}
+            />
+          </label>
+          {preview.numeric ? (
+            <p className="muted">Combined as a numeric variable.</p>
+          ) : (
+            <div className="checkbox-list">
+              {preview.labels.map((l) => (
+                <div
+                  key={l.label}
+                  className={
+                    l.in_sources < nSources
+                      ? 'combine-opt partial'
+                      : 'combine-opt'
+                  }
+                >
+                  {l.label}
+                  {l.in_sources < nSources && (
+                    <span className="muted">
+                      {' '}
+                      (only in {l.in_sources} of {nSources})
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : null}
+      {error && <p className="error">{error}</p>}
+      <div className="modal-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button
+          className="primary"
+          onClick={create}
+          disabled={busy || selected.length < 2}
+        >
+          {busy
+            ? 'Creating…'
+            : mode === 'grid'
+              ? 'Create comparison grid'
+              : 'Create combined variable'}
         </button>
       </div>
     </Modal>

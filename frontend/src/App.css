@@ -1105,3 +1105,55 @@ tr.hidden-var > td {
   color: #9aa3af;
   background: #fafbfc;
 }
+
+.pickany-delim {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.pickany-delim select {
+  flex: 0 0 auto;
+}
+.pickany-opt {
+  padding: 0.2rem 0;
+}
+
+.combine-order {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  padding: 0 0.3rem;
+  margin-right: 0.3rem;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.combine-opt {
+  padding: 0.2rem 0;
+}
+.combine-opt.partial {
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.combine-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.75rem;
+}
+.combine-mode {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  cursor: pointer;
+  line-height: 1.35;
+}
+.combine-mode input {
+  margin-top: 0.2rem;
+}

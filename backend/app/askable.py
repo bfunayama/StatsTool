@@ -17,7 +17,13 @@ import uuid
 import pandas as pd
 
 from . import ingest
-from .compute import seed_value_attributes, unique_name
+from .compute import (
+    build_compact_pickany,
+    compact_options,
+    detect_compact_delimiter,
+    seed_value_attributes,
+    unique_name,
+)
 from .models import (
     Question,
     QuestionItem,
@@ -152,6 +158,22 @@ class _Builder:
             )
         )
         return name
+
+    def add_compact_pickany(
+        self, base_name: str, label: str, series: pd.Series, delimiter: str
+    ) -> None:
+        """Keep the combined column (hidden) and derive its pick-any options."""
+        source = self._name(base_name)
+        self.columns[source] = series
+        self.variables.append(
+            Variable(name=source, label=label, type=VariableType.text, hidden=True)
+        )
+        options = [opt for opt, _ in compact_options(series, delimiter)]
+        members, question = build_compact_pickany(
+            source, label, options, delimiter, self._used
+        )
+        self.variables.extend(members)
+        self.questions.append(question)
 
     def frame(self) -> pd.DataFrame:
         return pd.DataFrame(self.columns)
@@ -329,13 +351,17 @@ def reshape_askable(
             elif btype == "open answer":
                 b.add_variable(block_name, block_name, series, VariableType.text)
             else:  # multiple choice question (and any other single-response block)
-                b.add_variable(
-                    block_name,
-                    block_name,
-                    series,
-                    VariableType.categorical,
-                    _mc_value_attributes(series),
-                )
+                delimiter = detect_compact_delimiter(series)
+                if delimiter:
+                    b.add_compact_pickany(block_name, block_name, series, delimiter)
+                else:
+                    b.add_variable(
+                        block_name,
+                        block_name,
+                        series,
+                        VariableType.categorical,
+                        _mc_value_attributes(series),
+                    )
             if dur_idx is not None:
                 _add_duration(b, body, dur_idx, block_name)
 

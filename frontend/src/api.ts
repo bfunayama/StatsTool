@@ -34,7 +34,22 @@ export interface BinaryRecode {
   false_label: string
 }
 
-export type Recode = BandRecode | BinaryRecode
+export interface CompactSelectRecode {
+  kind: 'compact_select'
+  value: string
+  delimiter: string
+}
+
+export interface CoalesceRecode {
+  kind: 'coalesce'
+  sources: string[]
+}
+
+export type Recode =
+  | BandRecode
+  | BinaryRecode
+  | CompactSelectRecode
+  | CoalesceRecode
 
 export interface WeightCell {
   values: string[]
@@ -682,6 +697,80 @@ export function binaryVariable(
     true_label: options?.true_label ?? 'Selected',
     false_label: options?.false_label ?? 'Not selected',
     new_label: options?.new_label ?? null,
+  })
+}
+
+export interface CompactOption {
+  label: string
+  count: number
+}
+
+export interface PickAnyCompactPreview {
+  delimiter: string | null
+  options: CompactOption[]
+  respondents: number
+  multi_selected: number
+}
+
+export function previewPickAnyCompact(
+  id: string,
+  source_variable: string,
+  delimiter?: string | null,
+): Promise<PickAnyCompactPreview> {
+  return postJson(`/api/datasets/${id}/variables/pick-any-compact/preview`, {
+    source_variable,
+    delimiter: delimiter ?? null,
+  })
+}
+
+export function pickAnyCompact(
+  id: string,
+  source_variable: string,
+  delimiter?: string | null,
+): Promise<DatasetMeta> {
+  return postJson(`/api/datasets/${id}/variables/pick-any-compact`, {
+    source_variable,
+    delimiter: delimiter ?? null,
+  })
+}
+
+export interface CoalesceSourceInfo {
+  name: string
+  label: string
+  answered: number
+}
+
+export interface CoalesceLabelInfo {
+  label: string
+  in_sources: number
+}
+
+export interface CoalescePreview {
+  suggested_label: string
+  base_n: number
+  conflict_n: number
+  sources: CoalesceSourceInfo[]
+  labels: CoalesceLabelInfo[]
+  numeric: boolean
+}
+
+export function previewCoalesce(
+  id: string,
+  sources: string[],
+): Promise<CoalescePreview> {
+  return postJson(`/api/datasets/${id}/variables/coalesce/preview`, { sources })
+}
+
+export function coalesceVariable(
+  id: string,
+  sources: string[],
+  new_label?: string,
+  mode: 'merge' | 'grid' = 'merge',
+): Promise<DatasetMeta> {
+  return postJson(`/api/datasets/${id}/variables/coalesce`, {
+    sources,
+    new_label: new_label ?? null,
+    mode,
   })
 }
 

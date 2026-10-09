@@ -70,7 +70,29 @@ class BinaryRecode(BaseModel):
     false_label: str = "Not selected"
 
 
-Recode = Annotated[Union[BandRecode, BinaryRecode], Field(discriminator="kind")]
+class CompactSelectRecode(BaseModel):
+    """One option of a compact pick-any: selected when the source cell lists
+    ``value`` among its ``delimiter``-separated parts (Displayr 'Pick Any - Compact').
+    """
+
+    kind: Literal["compact_select"] = "compact_select"
+    value: str
+    delimiter: str = "|"
+
+
+class CoalesceRecode(BaseModel):
+    """Merge parallel columns (e.g. a between-subjects variant split) into one:
+    each respondent's value is the first non-missing among ``sources`` in order.
+    """
+
+    kind: Literal["coalesce"] = "coalesce"
+    sources: list[str] = Field(default_factory=list)
+
+
+Recode = Annotated[
+    Union[BandRecode, BinaryRecode, CompactSelectRecode, CoalesceRecode],
+    Field(discriminator="kind"),
+]
 
 
 class WeightCell(BaseModel):
@@ -314,6 +336,68 @@ class BinaryRequest(BaseModel):
     true_values: list[str]
     true_label: str = "Selected"
     false_label: str = "Not selected"
+
+
+class PickAnyCompactRequest(BaseModel):
+    """Split a compact multi-answer column into a pick-any question.
+
+    ``delimiter`` of ``None`` auto-detects the separator (e.g. Askable's ``|``).
+    """
+
+    source_variable: str
+    delimiter: str | None = None
+
+
+class CompactOption(BaseModel):
+    """One detected option in a compact pick-any column, with its count."""
+
+    label: str
+    count: int
+
+
+class PickAnyCompactPreview(BaseModel):
+    """What a compact pick-any split would produce, without saving it."""
+
+    delimiter: str | None  # None → no multi-answer separator detected
+    options: list[CompactOption]
+    respondents: int  # answered the question
+    multi_selected: int  # chose more than one option
+
+
+class CoalesceRequest(BaseModel):
+    """Combine parallel variables: ``merge`` into one (first non-missing wins)
+    or ``grid`` into a side-by-side comparison set (one item per source).
+    """
+
+    sources: list[str]
+    new_label: str | None = None
+    mode: Literal["merge", "grid"] = "merge"
+
+
+class CoalesceSourceInfo(BaseModel):
+    """One source column in a coalesce, with how many respondents answered it."""
+
+    name: str
+    label: str
+    answered: int
+
+
+class CoalesceLabelInfo(BaseModel):
+    """A value label in the merged scale; ``in_sources`` = how many sources use it."""
+
+    label: str
+    in_sources: int
+
+
+class CoalescePreview(BaseModel):
+    """What a coalesce would produce, without saving it."""
+
+    suggested_label: str
+    base_n: int  # answered at least one source
+    conflict_n: int  # answered more than one source (first-wins applies)
+    sources: list[CoalesceSourceInfo]
+    labels: list[CoalesceLabelInfo]
+    numeric: bool  # every source is numeric
 
 
 class WeightRequest(BaseModel):

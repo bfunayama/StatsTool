@@ -7,16 +7,26 @@ them consistent (and nothing is duplicated on disk).
 
 from __future__ import annotations
 
+import uuid
+
 import pandas as pd
 
 from .models import (
     Band,
     BandRecode,
     BinaryRecode,
+    CoalesceRecode,
+    CompactSelectRecode,
+    Question,
+    QuestionItem,
+    QuestionKind,
     Variable,
     ValueAttribute,
     VariableType,
 )
+
+# Separators Askable (and similar tools) use to pack several picks into one cell.
+_COMPACT_DELIMITERS = ("|", ";")
 
 
 def build_index(variables: list[Variable]) -> dict[str, Variable]:
@@ -52,6 +62,11 @@ def label_order(var: Variable) -> list[str] | None:
         return [b.label for b in var.recode.bands]
     if isinstance(var.recode, BinaryRecode):
         return [var.recode.false_label, var.recode.true_label]
+    if isinstance(var.recode, CompactSelectRecode):
+        return [var.recode.value]
+    if isinstance(var.recode, CoalesceRecode):
+        labels = [v.label for v in var.values if not v.missing]
+        return labels or None
     if var.values:
         ordered = sorted(
             (v for v in var.values if not v.missing),
@@ -116,6 +131,9 @@ def compute_display_series(
     if var.type == VariableType.weight:
         return compute_weights(df, index, var)
 
+    if isinstance(var.recode, CoalesceRecode):
+        return _apply_coalesce(df, index, var.recode, visited)
+
     if var.source_name is None:
         raw = _clean(df[var.name])
     else:
@@ -125,6 +143,8 @@ def compute_display_series(
         return _apply_bands(pd.to_numeric(raw, errors="coerce"), var.recode.bands)
     if isinstance(var.recode, BinaryRecode):
         return _apply_binary(raw, var.recode)
+    if isinstance(var.recode, CompactSelectRecode):
+        return _apply_compact_select(raw, var.recode)
     return _apply_values(raw, var.values)
 
 
@@ -163,6 +183,156 @@ def _apply_binary(raw: pd.Series, recode: BinaryRecode) -> pd.Series:
         return recode.true_label if value in true_set else recode.false_label
 
     return raw.map(convert).astype("object")
+
+
+def _split_compact(cell, delimiter: str) -> list[str]:
+    """Split one compact cell into its trimmed, non-empty option labels."""
+    if cell is None or pd.isna(cell):
+        return []
+    return [p.strip() for p in str(cell).split(delimiter) if p.strip()]
+
+
+def _apply_compact_select(raw: pd.Series, recode: CompactSelectRecode) -> pd.Series:
+    """One pick-any member: the option label when selected, else missing."""
+
+    def convert(cell):
+        parts = _split_compact(cell, recode.delimiter)
+        if not parts:
+            return pd.NA
+        return recode.value if recode.value in parts else pd.NA
+
+    return raw.map(convert).astype("object")
+
+
+def _coalesce_series(
+    df: pd.DataFrame,
+    index: dict[str, Variable],
+    sources: list[str],
+    visited: set[str],
+) -> list[pd.Series]:
+    """Display series for each coalesce source (resolving derived sources)."""
+    out: list[pd.Series] = []
+    for name in sources:
+        var = index.get(name)
+        if var is None:
+            if name in df.columns:
+                out.append(_clean(df[name]))
+                continue
+            raise ValueError(f"Unknown source variable: {name}")
+        out.append(_clean(compute_display_series(df, index, var, visited)))
+    return out
+
+
+def _apply_coalesce(
+    df: pd.DataFrame,
+    index: dict[str, Variable],
+    recode: CoalesceRecode,
+    visited: set[str],
+) -> pd.Series:
+    """First non-missing value across the source columns, row by row."""
+    series = _coalesce_series(df, index, recode.sources, visited)
+    if not series:
+        return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+    result = series[0].copy()
+    for s in series[1:]:
+        result = result.where(result.notna(), s)
+    return result.astype("object")
+
+
+def coalesce_value_attributes(
+    df: pd.DataFrame, index: dict[str, Variable], sources: list[str]
+) -> list[ValueAttribute]:
+    """Union of the source value labels, first-seen order, sequential codes."""
+    series = _coalesce_series(df, index, sources, set())
+    seen: list[str] = []
+    for s in series:
+        for label in s.dropna().astype(str):
+            if label not in seen:
+                seen.append(label)
+    return [
+        ValueAttribute(source_value=label, value=float(i + 1), label=label)
+        for i, label in enumerate(seen)
+    ]
+
+
+def detect_compact_delimiter(series: pd.Series) -> str | None:
+    """Return the separator that packs multiple picks into one cell, or None.
+
+    A delimiter qualifies only if at least one cell splits into two or more
+    non-empty parts (a lone answer label never contains the separator).
+    """
+    s = series.dropna().astype(str)
+    if s.empty:
+        return None
+    for delimiter in _COMPACT_DELIMITERS:
+        if s.map(lambda cell, d=delimiter: len(_split_compact(cell, d)) > 1).any():
+            return delimiter
+    return None
+
+
+def compact_options(series: pd.Series, delimiter: str) -> list[tuple[str, int]]:
+    """Distinct options across a compact column, ordered by count then label."""
+    counts: dict[str, int] = {}
+    for cell in series:
+        for opt in _split_compact(cell, delimiter):
+            counts[opt] = counts.get(opt, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def build_comparison_grid(
+    sources: list[str],
+    item_labels: list[str],
+    name: str,
+    categories: list[str],
+) -> Question:
+    """A side-by-side comparison grid: one item per source, sharing one scale."""
+    return Question(
+        id=uuid.uuid4().hex,
+        name=name,
+        label=name,
+        kind=QuestionKind.grid,
+        items=[
+            QuestionItem(column=src, label=label)
+            for src, label in zip(sources, item_labels)
+        ],
+        categories=categories,
+    )
+
+
+def build_compact_pickany(
+    source_name: str,
+    source_label: str,
+    options: list[str],
+    delimiter: str,
+    existing: set[str],
+) -> tuple[list[Variable], Question]:
+    """Derived member variables + a pick-any question for a compact column."""
+    qid = uuid.uuid4().hex
+    members: list[Variable] = []
+    items: list[QuestionItem] = []
+    for opt in options:
+        name = unique_name(f"{source_label}: {opt}", existing)
+        existing.add(name)
+        members.append(
+            Variable(
+                name=name,
+                label=opt,
+                type=VariableType.categorical,
+                source_name=source_name,
+                values=[ValueAttribute(source_value=opt, value=1.0, label=opt)],
+                recode=CompactSelectRecode(value=opt, delimiter=delimiter),
+                question_id=qid,
+            )
+        )
+        items.append(QuestionItem(column=name, label=opt))
+    question = Question(
+        id=qid,
+        name=source_label,
+        label=source_label,
+        kind=QuestionKind.multi,
+        items=items,
+    )
+    return members, question
 
 
 def band_value_attributes(bands: list[Band]) -> list[ValueAttribute]:

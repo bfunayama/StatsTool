@@ -25,6 +25,11 @@ from .models import (
     BandRequest,
     BinaryRecode,
     BinaryRequest,
+    CoalesceLabelInfo,
+    CoalescePreview,
+    CoalesceRecode,
+    CoalesceRequest,
+    CoalesceSourceInfo,
     Combination,
     CombinationsRequest,
     CombinationsResponse,
@@ -44,6 +49,9 @@ from .models import (
     Filter,
     FilterCountResponse,
     FiltersUpdate,
+    PickAnyCompactPreview,
+    PickAnyCompactRequest,
+    CompactOption,
     PreviewResponse,
     ProjectCreate,
     QuestionsUpdate,
@@ -390,6 +398,187 @@ def binary_variable(dataset_id: str, payload: BinaryRequest) -> DatasetMeta:
     return meta
 
 
+def _compact_source_series(meta: DatasetMeta, df, src: Variable):
+    """Underlying text a compact pick-any member would be split from."""
+    index = compute.build_index(meta.variables)
+    return compute._source_series(df, index, src.name, set())
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/variables/pick-any-compact/preview",
+    response_model=PickAnyCompactPreview,
+)
+def preview_pick_any_compact(
+    dataset_id: str, payload: PickAnyCompactRequest
+) -> PickAnyCompactPreview:
+    """Show the options a compact multi-answer column would split into."""
+    meta, df = _load(dataset_id)
+    src = _require_variable(meta, payload.source_variable)
+    series = _compact_source_series(meta, df, src)
+    delimiter = payload.delimiter or compute.detect_compact_delimiter(series)
+    if not delimiter:
+        answered = int(series.map(lambda c: bool(compute._split_compact(c, "|"))).sum())
+        return PickAnyCompactPreview(
+            delimiter=None, options=[], respondents=answered, multi_selected=0
+        )
+    counts = series.map(lambda c: len(compute._split_compact(c, delimiter)))
+    options = [
+        CompactOption(label=label, count=count)
+        for label, count in compute.compact_options(series, delimiter)
+    ]
+    return PickAnyCompactPreview(
+        delimiter=delimiter,
+        options=options,
+        respondents=int((counts > 0).sum()),
+        multi_selected=int((counts > 1).sum()),
+    )
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/variables/pick-any-compact",
+    response_model=DatasetMeta,
+)
+def pick_any_compact(dataset_id: str, payload: PickAnyCompactRequest) -> DatasetMeta:
+    """Turn a compact multi-answer column into a pick-any question."""
+    meta, df = _load(dataset_id)
+    src = _require_variable(meta, payload.source_variable)
+    series = _compact_source_series(meta, df, src)
+    delimiter = payload.delimiter or compute.detect_compact_delimiter(series)
+    if not delimiter:
+        raise HTTPException(
+            status_code=400,
+            detail="No multi-answer separator found. Choose a delimiter.",
+        )
+    options = [label for label, _ in compute.compact_options(series, delimiter)]
+    if not options:
+        raise HTTPException(status_code=400, detail="No options to split out.")
+
+    existing = {v.name for v in meta.variables}
+    members, question = compute.build_compact_pickany(
+        src.name, src.label, options, delimiter, existing
+    )
+    meta.variables.extend(members)
+    meta.questions.append(question)
+    src.hidden = True  # the pick-any question is now the analysable form
+    detect.apply_membership(meta.variables, meta.questions)
+    storage.save_meta(meta)
+    return meta
+
+
+def _default_coalesce_label(labels: list[str]) -> str:
+    """A sensible merged label: the shared stem after the first ' - ', else '(combined)'."""
+    if labels and all(" - " in lbl for lbl in labels):
+        stems = {lbl.split(" - ", 1)[1].strip() for lbl in labels}
+        if len(stems) == 1:
+            return next(iter(stems))
+    return f"{labels[0]} (combined)" if labels else "Combined"
+
+
+def _variant_item_label(full_label: str, stem: str) -> str:
+    """The part of a source label that identifies its variant (stem removed)."""
+    suffix = f" - {stem}"
+    if full_label.endswith(suffix) and len(full_label) > len(suffix):
+        return full_label[: -len(suffix)]
+    return full_label
+
+
+def _coalesce_sources(meta: DatasetMeta, names: list[str]) -> list[Variable]:
+    if len(names) < 2:
+        raise HTTPException(
+            status_code=400, detail="Select at least two variables to combine."
+        )
+    return [_require_variable(meta, name) for name in names]
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/variables/coalesce/preview",
+    response_model=CoalescePreview,
+)
+def coalesce_preview(dataset_id: str, payload: CoalesceRequest) -> CoalescePreview:
+    """Show what combining parallel variables would produce, without saving."""
+    meta, df = _load(dataset_id)
+    srcs = _coalesce_sources(meta, payload.sources)
+    index = compute.build_index(meta.variables)
+    series = [compute.compute_display_series(df, index, s) for s in srcs]
+    answered = [s.notna() for s in series]
+
+    answered_count = answered[0].astype(int).copy()
+    for mask in answered[1:]:
+        answered_count = answered_count + mask.astype(int)
+
+    in_sources: dict[str, int] = {}
+    order: list[str] = []
+    for s in series:
+        labels = s.dropna().astype(str)
+        for label in labels:
+            if label not in in_sources:
+                in_sources[label] = 0
+                order.append(label)
+        for label in set(labels):
+            in_sources[label] += 1
+
+    return CoalescePreview(
+        suggested_label=payload.new_label or _default_coalesce_label([s.label for s in srcs]),
+        base_n=int((answered_count > 0).sum()),
+        conflict_n=int((answered_count > 1).sum()),
+        sources=[
+            CoalesceSourceInfo(name=s.name, label=s.label, answered=int(a.sum()))
+            for s, a in zip(srcs, answered)
+        ],
+        labels=[CoalesceLabelInfo(label=label, in_sources=in_sources[label]) for label in order],
+        numeric=all(s.type is VariableType.numeric for s in srcs),
+    )
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/variables/coalesce", response_model=DatasetMeta
+)
+def coalesce_variable(dataset_id: str, payload: CoalesceRequest) -> DatasetMeta:
+    """Combine parallel variables (e.g. a variant split): merge into one, or
+    group into a side-by-side comparison grid (one item per source)."""
+    meta, df = _load(dataset_id)
+    srcs = _coalesce_sources(meta, payload.sources)
+    index = compute.build_index(meta.variables)
+    stem = _default_coalesce_label([s.label for s in srcs])
+
+    if payload.mode == "grid":
+        categories = [
+            va.label
+            for va in compute.coalesce_value_attributes(df, index, payload.sources)
+        ]
+        question = compute.build_comparison_grid(
+            payload.sources,
+            [_variant_item_label(s.label, stem) for s in srcs],
+            payload.new_label or stem,
+            categories,
+        )
+        meta.questions.append(question)
+        detect.apply_membership(meta.variables, meta.questions)
+        storage.save_meta(meta)
+        return meta
+
+    if all(s.type is VariableType.numeric for s in srcs):
+        vtype, values = VariableType.numeric, []
+    elif all(s.type is VariableType.text for s in srcs):
+        vtype, values = VariableType.text, []
+    else:
+        vtype = VariableType.categorical
+        values = compute.coalesce_value_attributes(df, index, payload.sources)
+
+    existing = {v.name for v in meta.variables}
+    new_var = Variable(
+        name=compute.unique_name(f"{srcs[0].name}_combined", existing),
+        label=payload.new_label or stem,
+        type=vtype,
+        source_name=None,
+        values=values,
+        recode=CoalesceRecode(sources=payload.sources),
+    )
+    meta.variables.append(new_var)
+    storage.save_meta(meta)
+    return meta
+
+
 @app.post("/api/datasets/{dataset_id}/combinations", response_model=CombinationsResponse)
 def variable_combinations(
     dataset_id: str, payload: CombinationsRequest
@@ -514,7 +703,12 @@ def delete_variable(dataset_id: str, name: str) -> DatasetMeta:
         raise HTTPException(
             status_code=400, detail="Imported columns cannot be deleted."
         )
-    dependents = [v.name for v in meta.variables if v.source_name == name]
+    dependents = [
+        v.name
+        for v in meta.variables
+        if v.source_name == name
+        or (isinstance(v.recode, CoalesceRecode) and name in v.recode.sources)
+    ]
     if dependents:
         raise HTTPException(
             status_code=400,
@@ -693,11 +887,14 @@ def _validate_variables(variables: list[Variable], df: pd.DataFrame) -> None:
         raise HTTPException(status_code=400, detail="Duplicate variable names.")
 
     raw_columns = {str(c) for c in df.columns}
-    # Weight variables are computed (no source column), so they aren't raw imports.
+    # Weight and coalesce variables are computed (no single source column),
+    # so they aren't raw imports.
     raw_names = {
         v.name
         for v in variables
-        if v.source_name is None and v.type is not VariableType.weight
+        if v.source_name is None
+        and v.type is not VariableType.weight
+        and not isinstance(v.recode, CoalesceRecode)
     }
     if raw_names != raw_columns:
         raise HTTPException(
@@ -711,6 +908,13 @@ def _validate_variables(variables: list[Variable], df: pd.DataFrame) -> None:
                 status_code=400,
                 detail=f"{var.name} refers to a missing source: {var.source_name}.",
             )
+        if isinstance(var.recode, CoalesceRecode):
+            for source in var.recode.sources:
+                if source not in name_set:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{var.name} combines a missing variable: {source}.",
+                    )
 
 
 def _display_frame(df: pd.DataFrame, meta: DatasetMeta) -> pd.DataFrame:
