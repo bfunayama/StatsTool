@@ -93,7 +93,7 @@ export function DriverPanel({
   const numericVars = useMemo(
     () =>
       meta.variables.filter(
-        (v) => !v.question_id && v.type !== 'weight' && varIsNumeric(v),
+        (v) => !v.question_id && v.type !== 'weight' && !v.hidden && varIsNumeric(v),
       ),
     [meta.variables],
   )
@@ -102,7 +102,7 @@ export function DriverPanel({
     [meta.questions],
   )
   const weightVars = useMemo(
-    () => meta.variables.filter((v) => v.type === 'weight'),
+    () => meta.variables.filter((v) => v.type === 'weight' && !v.hidden),
     [meta.variables],
   )
 

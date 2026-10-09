@@ -8,6 +8,7 @@ import {
   type WeightPreview,
   type WeightRim,
 } from '../api'
+import { useBackdropDismiss } from '../useBackdropDismiss'
 
 interface Props {
   datasetId: string
@@ -26,6 +27,7 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [preview, setPreview] = useState<WeightPreview | null>(null)
+  const backdrop = useBackdropDismiss()
 
   // Variables you can weight on (not weights, not grouped-question members).
   const weightable = variables.filter((v) => v.type !== 'weight' && !v.question_id)
@@ -184,7 +186,7 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" {...backdrop(onClose)}>
       <div
         className="modal weight-modal"
         onClick={(e) => e.stopPropagation()}

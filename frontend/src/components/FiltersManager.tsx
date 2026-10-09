@@ -190,7 +190,7 @@ function FilterEditor({
   }
 
   function addCondition() {
-    const first = meta.variables[0]
+    const first = meta.variables.find((v) => !v.hidden) ?? meta.variables[0]
     const type = first?.type ?? 'categorical'
     setConditions([
       ...draft.conditions,
@@ -372,11 +372,13 @@ function ConditionRow({
           value={condition.variable}
           onChange={(e) => pickVariable(e.target.value)}
         >
-          {meta.variables.map((v) => (
-            <option key={v.name} value={v.name}>
-              {v.label}
-            </option>
-          ))}
+          {meta.variables
+            .filter((v) => !v.hidden || v.name === condition.variable)
+            .map((v) => (
+              <option key={v.name} value={v.name}>
+                {v.label}
+              </option>
+            ))}
         </select>
         <select
           value={condition.operator}

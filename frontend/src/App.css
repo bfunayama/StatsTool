@@ -1100,3 +1100,8 @@ button.danger:hover:not(:disabled) {
   cursor: pointer;
   text-decoration: underline;
 }
+
+tr.hidden-var > td {
+  color: #9aa3af;
+  background: #fafbfc;
+}

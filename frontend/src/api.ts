@@ -62,6 +62,7 @@ export interface Variable {
   recode: Recode | null
   question_id?: string | null
   weighting?: WeightSpec | null
+  hidden?: boolean
 }
 
 export interface Combination {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 import { getDataset, projectExportUrl, type DatasetMeta } from './api'
+import { useBackdropDismiss } from './useBackdropDismiss'
 import { DatasetImport } from './components/DatasetImport'
 import { DataPreview } from './components/DataPreview'
 import { CrosstabView } from './components/CrosstabView'
@@ -24,6 +25,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveIncludeData, setSaveIncludeData] = useState(true)
+  const backdrop = useBackdropDismiss()
 
   function doSave() {
     if (!meta) return
@@ -148,7 +150,7 @@ function App() {
       )}
 
       {saveOpen && meta && (
-        <div className="modal-backdrop" onClick={() => setSaveOpen(false)}>
+        <div className="modal-backdrop" {...backdrop(() => setSaveOpen(false))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Save project file</h3>

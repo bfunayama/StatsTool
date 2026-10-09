@@ -25,6 +25,7 @@ import {
   type SavedCrosstabSpec,
 } from '../api'
 import { DriverPanel, defaultDriverSpec } from './DriverPanel'
+import { useBackdropDismiss } from '../useBackdropDismiss'
 
 interface Props {
   meta: DatasetMeta
@@ -259,12 +260,16 @@ function moveNode(
 }
 
 export function CrosstabView({ meta, onChanged }: Props) {
+  const backdrop = useBackdropDismiss()
   const memberless = useMemo(
-    () => meta.variables.filter((v) => !v.question_id && v.type !== 'weight'),
+    () =>
+      meta.variables.filter(
+        (v) => !v.question_id && v.type !== 'weight' && !v.hidden,
+      ),
     [meta.variables],
   )
   const weightVars = useMemo(
-    () => meta.variables.filter((v) => v.type === 'weight'),
+    () => meta.variables.filter((v) => v.type === 'weight' && !v.hidden),
     [meta.variables],
   )
   const multiQuestions = useMemo(
@@ -290,6 +295,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
         }
         continue
       }
+      if (v.hidden) continue
       out.push({ value: `v:${v.name}`, label: v.label })
     }
     return out
@@ -459,7 +465,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
   })()
   // Standalone numeric variables usable as a correlation operand (not grid items).
   const numericVars = useMemo(
-    () => meta.variables.filter((v) => v.question_id == null && varIsNumeric(v)),
+    () =>
+      meta.variables.filter(
+        (v) => v.question_id == null && !v.hidden && varIsNumeric(v),
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [meta.variables],
   )
@@ -3596,7 +3605,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
       )}
 
       {sigTest && (
-        <div className="modal-backdrop" onClick={() => setSigTest(null)}>
+        <div className="modal-backdrop" {...backdrop(() => setSigTest(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Significance test</h3>
@@ -3655,7 +3664,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
         </div>
       )}
       {confirmDelete && (
-        <div className="modal-backdrop" onClick={() => setConfirmDelete(null)}>
+        <div className="modal-backdrop" {...backdrop(() => setConfirmDelete(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Delete {confirmDelete.kind === 'folder' ? 'folder' : 'table'}</h3>
@@ -3682,7 +3691,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
         </div>
       )}
       {exportChoice && (
-        <div className="modal-backdrop" onClick={() => setExportChoice(null)}>
+        <div className="modal-backdrop" {...backdrop(() => setExportChoice(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>

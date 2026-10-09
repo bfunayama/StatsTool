@@ -18,6 +18,7 @@ import {
   type Variable,
   type VariableType,
 } from '../api'
+import { useBackdropDismiss } from '../useBackdropDismiss'
 
 interface Props {
   meta: DatasetMeta
@@ -325,6 +326,9 @@ export function VariableEditor({ meta, onChanged }: Props) {
                     if (confirm(`Delete variable "${v.label}"?`))
                       run(() => deleteVariable(meta.id, v.name))
                   }}
+                  onToggleHidden={() =>
+                    patchVariable(v.name, { hidden: !v.hidden })
+                  }
                 />
               )
             })}
@@ -385,6 +389,7 @@ interface RowProps {
   onBinary: () => void
   onEditWeight: () => void
   onDelete: () => void
+  onToggleHidden: () => void
 }
 
 function QuestionRow({
@@ -579,6 +584,7 @@ function VariableRow({
   onBinary,
   onEditWeight,
   onDelete,
+  onToggleHidden,
 }: RowProps) {
   const derived = variable.source_name !== null
   const isNumeric = variable.type === 'numeric'
@@ -588,7 +594,7 @@ function VariableRow({
 
   return (
     <>
-      <tr>
+      <tr className={variable.hidden ? 'hidden-var' : undefined}>
         <td>
           <button className="expand" onClick={onToggle} aria-label="Toggle values">
             {isOpen ? '▾' : '▸'}
@@ -598,6 +604,7 @@ function VariableRow({
           {variable.name}
           {isWeight && <span className="badge">weight</span>}
           {derived && <span className="badge">derived</span>}
+          {variable.hidden && <span className="badge">hidden</span>}
         </td>
         <td>
           <input
@@ -624,6 +631,12 @@ function VariableRow({
         </td>
         <td>
           <div className="row-actions">
+            <button
+              onClick={onToggleHidden}
+              title="Hide from filter, crosstab and driver lists (data is kept)"
+            >
+              {variable.hidden ? 'Show in lists' : 'Hide from lists'}
+            </button>
             {isWeight ? (
               <>
                 <button onClick={onEditWeight}>Edit weight</button>
@@ -1208,8 +1221,9 @@ function Modal({
   onClose: () => void
   children: React.ReactNode
 }) {
+  const backdrop = useBackdropDismiss()
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" {...backdrop(onClose)}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>

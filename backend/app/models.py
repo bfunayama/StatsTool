@@ -122,6 +122,8 @@ class Variable(BaseModel):
     question_id: str | None = None
     # Set only for type == weight: how the rake weight is defined.
     weighting: WeightSpec | None = None
+    # Hide from analysis dropdowns (filters/crosstabs/drivers); data is kept.
+    hidden: bool = False
 
 
 class QuestionKind(str, Enum):

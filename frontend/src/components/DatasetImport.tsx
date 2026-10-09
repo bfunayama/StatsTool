@@ -14,12 +14,14 @@ import {
   type RefreshReport,
   type SourceFormat,
 } from '../api'
+import { useBackdropDismiss } from '../useBackdropDismiss'
 
 interface Props {
   onOpen: (datasetId: string) => void
 }
 
 export function DatasetImport({ onOpen }: Props) {
+  const backdrop = useBackdropDismiss()
   const [groups, setGroups] = useState<DataGroup[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -404,7 +406,7 @@ export function DatasetImport({ onOpen }: Props) {
       )}
 
       {importOpen && (
-        <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
+        <div className="modal-backdrop" {...backdrop(() => setImportOpen(false))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Import a data file</h3>
@@ -456,7 +458,7 @@ export function DatasetImport({ onOpen }: Props) {
       )}
 
       {renameTarget && (
-        <div className="modal-backdrop" onClick={() => setRenameTarget(null)}>
+        <div className="modal-backdrop" {...backdrop(() => setRenameTarget(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Rename project</h3>
@@ -482,7 +484,7 @@ export function DatasetImport({ onOpen }: Props) {
       )}
 
       {deleteTarget && (
-        <div className="modal-backdrop" onClick={() => setDeleteTarget(null)}>
+        <div className="modal-backdrop" {...backdrop(() => setDeleteTarget(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Delete project</h3>
@@ -503,7 +505,7 @@ export function DatasetImport({ onOpen }: Props) {
       )}
 
       {saveTarget && (
-        <div className="modal-backdrop" onClick={() => setSaveTarget(null)}>
+        <div className="modal-backdrop" {...backdrop(() => setSaveTarget(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Save project file</h3>
@@ -538,7 +540,7 @@ export function DatasetImport({ onOpen }: Props) {
       {templatePending && (
         <div
           className="modal-backdrop"
-          onClick={() => setTemplatePending(null)}
+          {...backdrop(() => setTemplatePending(null))}
         >
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -580,7 +582,7 @@ export function DatasetImport({ onOpen }: Props) {
       )}
 
       {refreshTarget && refreshFile && (
-        <div className="modal-backdrop" onClick={closeRefresh}>
+        <div className="modal-backdrop" {...backdrop(closeRefresh)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Update data set</h3>
