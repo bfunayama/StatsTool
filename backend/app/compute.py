@@ -451,16 +451,40 @@ def compute_weights(
     weights[included] = 1.0
 
     # Precompute each rim's cell masks + normalised targets (skip empty cells).
+    n_included = float(included.sum()) or 1.0
     rim_cells: list[list[tuple[pd.Series, float]]] = []
     for rim in spec.rims:
+        # "column" basis: targets are distributions within each category of the
+        # second variable; rebase by that variable's observed share so its
+        # marginal split is preserved instead of forced to an equal split.
+        per_column = rim.basis == "column" and len(rim.variables) == 2
+        col_share: dict[str, float] = {}
+        col_entered: dict[str, float] = {}
+        if per_column:
+            col_series = series[rim.variables[1]][included]
+            for value in col_series.dropna().unique():
+                col_share[str(value)] = float((col_series == value).sum()) / n_included
+            for cell in rim.cells:
+                col_entered[cell.values[1]] = (
+                    col_entered.get(cell.values[1], 0.0) + cell.percent
+                )
+
         total_pct = sum(c.percent for c in rim.cells) or 1.0
         cells: list[tuple[pd.Series, float]] = []
         for cell in rim.cells:
             mask = included.copy()
             for var_name, value in zip(rim.variables, cell.values):
                 mask &= series[var_name] == value
-            if bool(mask.any()):
-                cells.append((mask, cell.percent / total_pct))
+            if not bool(mask.any()):
+                continue
+            if per_column:
+                denom = col_entered.get(cell.values[1], 0.0) or 1.0
+                target_prop = col_share.get(cell.values[1], 0.0) * (
+                    cell.percent / denom
+                )
+            else:
+                target_prop = cell.percent / total_pct
+            cells.append((mask, target_prop))
         rim_cells.append(cells)
 
     for _ in range(max(1, spec.max_iter)):

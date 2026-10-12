@@ -20,6 +20,20 @@ interface Props {
 
 const KEY_SEP = '\u0001'
 
+// A rim's targets are valid when they total 100% — overall for a joint rim, or
+// within each column category when the rim uses the "column" basis.
+function rimValid(rim: WeightRim): boolean {
+  if (rim.cells.length === 0) return true
+  if (rim.basis === 'column' && rim.variables.length === 2) {
+    const totals = new Map<string, number>()
+    for (const c of rim.cells)
+      totals.set(c.values[1], (totals.get(c.values[1]) || 0) + (c.percent || 0))
+    return [...totals.values()].every((t) => Math.abs(t - 100) <= 0.5)
+  }
+  const sum = rim.cells.reduce((a, c) => a + (c.percent || 0), 0)
+  return Math.abs(sum - 100) <= 0.5
+}
+
 export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }: Props) {
   const [label, setLabel] = useState(initial?.label ?? 'Weight')
   const [rims, setRims] = useState<WeightRim[]>(initial?.weighting?.rims ?? [])
@@ -80,11 +94,7 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
     const ready =
       rims.length > 0 &&
       rims.every(
-        (r) =>
-          r.variables.length > 0 &&
-          r.cells.length > 0 &&
-          Math.abs(r.cells.reduce((a, c) => a + (c.percent || 0), 0) - 100) <=
-            0.5,
+        (r) => r.variables.length > 0 && r.cells.length > 0 && rimValid(r),
       )
     if (!ready) {
       setPreview(null)
@@ -109,7 +119,13 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
   function addRim() {
     setRims([
       ...rims,
-      { id: crypto.randomUUID(), variables: [], missing: 'exclude', cells: [] },
+      {
+        id: crypto.randomUUID(),
+        variables: [],
+        missing: 'exclude',
+        basis: 'overall',
+        cells: [],
+      },
     ])
   }
 
@@ -136,6 +152,10 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
     reloadCells(next)
   }
 
+  function setBasis(rim: WeightRim, basis: 'overall' | 'column') {
+    setRims((prev) => prev.map((r) => (r.id === rim.id ? { ...r, basis } : r)))
+  }
+
   function setPercent(rimId: string, index: number, percent: number) {
     setRims((prev) =>
       prev.map((r) =>
@@ -159,14 +179,12 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
       setError('Each rim needs at least one variable.')
       return
     }
-    const bad = rims.find(
-      (r) =>
-        r.cells.length > 0 &&
-        Math.abs(r.cells.reduce((a, c) => a + (c.percent || 0), 0) - 100) > 0.5,
-    )
+    const bad = rims.find((r) => r.cells.length > 0 && !rimValid(r))
     if (bad) {
       setError(
-        `Targets for ${bad.variables.join(' × ')} must add to 100% before saving.`,
+        bad.basis === 'column' && bad.variables.length === 2
+          ? `Each ${labelFor(bad.variables[1])} column's targets must total 100% before saving.`
+          : `Targets for ${bad.variables.join(' × ')} must add to 100% before saving.`,
       )
       return
     }
@@ -225,7 +243,9 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
         <div className="weight-rims">
           {rims.map((rim) => {
             const sum = rim.cells.reduce((a, c) => a + (c.percent || 0), 0)
-            const offTarget = rim.cells.length > 0 && Math.abs(sum - 100) > 0.5
+            const perColumn =
+              rim.basis === 'column' && rim.variables.length === 2
+            const offTarget = rim.cells.length > 0 && !rimValid(rim)
             return (
               <div key={rim.id} className="weight-rim">
                 <div className="weight-rim-head">
@@ -245,6 +265,22 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
                       <option value="category">Separate category</option>
                     </select>
                   </label>
+                  {rim.variables.length === 2 && (
+                    <label className="muted">
+                      Targets:{' '}
+                      <select
+                        value={rim.basis}
+                        onChange={(e) =>
+                          setBasis(rim, e.target.value as 'overall' | 'column')
+                        }
+                      >
+                        <option value="overall">Overall %</option>
+                        <option value="column">
+                          % within {labelFor(rim.variables[1])}
+                        </option>
+                      </select>
+                    </label>
+                  )}
                   <button className="danger" onClick={() => removeRim(rim.id)}>
                     Remove
                   </button>
@@ -279,42 +315,56 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
                 </div>
 
                 {busy === rim.id && <p className="muted">Loading categories…</p>}
-                {rim.cells.length > 0 && (
-                  <table className="grid values weight-cells">
-                    <thead>
-                      <tr>
-                        <th>Category</th>
-                        <th style={{ width: '7rem' }}>Target %</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rim.cells.map((c, i) => (
-                        <tr key={c.values.join(KEY_SEP)}>
-                          <td>{c.values.join(' · ')}</td>
-                          <td>
-                            <input
-                              className="cell-input"
-                              type="number"
-                              value={c.percent}
-                              onChange={(e) =>
-                                setPercent(rim.id, i, Number(e.target.value))
-                              }
-                            />
+                {rim.cells.length > 0 &&
+                  (rim.variables.length === 2 ? (
+                    <WeightCellsMatrix
+                      rim={rim}
+                      rowLabel={labelFor(rim.variables[0])}
+                      colLabel={labelFor(rim.variables[1])}
+                      perColumn={perColumn}
+                      offTarget={offTarget}
+                      onPercent={(index, percent) =>
+                        setPercent(rim.id, index, percent)
+                      }
+                    />
+                  ) : (
+                    <table className="grid values weight-cells">
+                      <thead>
+                        <tr>
+                          <th>Category</th>
+                          <th style={{ width: '7rem' }}>Target %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rim.cells.map((c, i) => (
+                          <tr key={c.values.join(KEY_SEP)}>
+                            <td>{c.values.join(' · ')}</td>
+                            <td>
+                              <input
+                                className="cell-input"
+                                type="number"
+                                value={c.percent}
+                                onChange={(e) =>
+                                  setPercent(rim.id, i, Number(e.target.value))
+                                }
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                        <tr>
+                          <td className="muted">Total</td>
+                          <td className={offTarget ? 'error' : 'muted'}>
+                            {sum.toFixed(1)}%
                           </td>
                         </tr>
-                      ))}
-                      <tr>
-                        <td className="muted">Total</td>
-                        <td className={offTarget ? 'error' : 'muted'}>
-                          {sum.toFixed(1)}%
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                )}
+                      </tbody>
+                    </table>
+                  ))}
                 {offTarget && (
                   <p className="error">
-                    Targets add to {sum.toFixed(1)}% — adjust them to total 100%.
+                    {perColumn
+                      ? `Each ${labelFor(rim.variables[1])} column must total 100%.`
+                      : `Targets add to ${sum.toFixed(1)}% — adjust them to total 100%.`}
                   </p>
                 )}
               </div>
@@ -334,5 +384,100 @@ export function WeightDialog({ datasetId, variables, initial, onClose, onSaved }
         </div>
       </div>
     </div>
+  )
+}
+
+// Two-variable interlocked targets shown as a crosstab: rows = first variable,
+// columns = the "cross with" variable, with row/column subtotals.
+function WeightCellsMatrix({
+  rim,
+  rowLabel,
+  colLabel,
+  perColumn,
+  offTarget,
+  onPercent,
+}: {
+  rim: WeightRim
+  rowLabel: string
+  colLabel: string
+  perColumn: boolean
+  offTarget: boolean
+  onPercent: (index: number, percent: number) => void
+}) {
+  const rowVals: string[] = []
+  const colVals: string[] = []
+  const byKey = new Map<string, { percent: number; index: number }>()
+  rim.cells.forEach((c, i) => {
+    if (!rowVals.includes(c.values[0])) rowVals.push(c.values[0])
+    if (!colVals.includes(c.values[1])) colVals.push(c.values[1])
+    byKey.set(c.values[0] + KEY_SEP + c.values[1], { percent: c.percent, index: i })
+  })
+  const colTotal = (cv: string) =>
+    rowVals.reduce((a, rv) => a + (byKey.get(rv + KEY_SEP + cv)?.percent || 0), 0)
+  const grand = rim.cells.reduce((a, c) => a + (c.percent || 0), 0)
+
+  return (
+    <table className="grid values weight-cells">
+      <thead>
+        <tr>
+          <th>
+            {rowLabel} <span className="muted">\</span> {colLabel}
+          </th>
+          {colVals.map((cv) => (
+            <th key={cv}>{cv}</th>
+          ))}
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rowVals.map((rv) => {
+          const rowTotal = colVals.reduce(
+            (a, cv) => a + (byKey.get(rv + KEY_SEP + cv)?.percent || 0),
+            0,
+          )
+          return (
+            <tr key={rv}>
+              <td>{rv}</td>
+              {colVals.map((cv) => {
+                const hit = byKey.get(rv + KEY_SEP + cv)
+                return (
+                  <td key={cv}>
+                    {hit ? (
+                      <input
+                        className="cell-input"
+                        type="number"
+                        value={hit.percent}
+                        onChange={(e) =>
+                          onPercent(hit.index, Number(e.target.value))
+                        }
+                      />
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                )
+              })}
+              <td className="muted">{rowTotal.toFixed(1)}%</td>
+            </tr>
+          )
+        })}
+        <tr>
+          <td className="muted">Total</td>
+          {colVals.map((cv) => (
+            <td
+              key={cv}
+              className={
+                perColumn && Math.abs(colTotal(cv) - 100) > 0.5 ? 'error' : 'muted'
+              }
+            >
+              {colTotal(cv).toFixed(1)}%
+            </td>
+          ))}
+          <td className={!perColumn && offTarget ? 'error' : 'muted'}>
+            {grand.toFixed(1)}%
+          </td>
+        </tr>
+      </tbody>
+    </table>
   )
 }

@@ -618,16 +618,30 @@ def _validate_weight_spec(spec: WeightSpec, names: set[str]) -> None:
                 )
         # Targets must sum to 100% — reject rather than silently rescaling.
         if rim.cells:
-            total = sum(c.percent for c in rim.cells)
-            if abs(total - 100) > 0.5:
-                where = " × ".join(rim.variables)
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Targets for {where} add to {total:.1f}%, not 100%. "
-                        "Adjust them to total 100%."
-                    ),
-                )
+            if rim.basis == "column" and len(rim.variables) == 2:
+                col_totals: dict[str, float] = {}
+                for c in rim.cells:
+                    col_totals[c.values[1]] = col_totals.get(c.values[1], 0.0) + c.percent
+                off = [b for b, t in col_totals.items() if abs(t - 100) > 0.5]
+                if off:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Each column's targets must total 100%. "
+                            f"Off: {', '.join(off)}."
+                        ),
+                    )
+            else:
+                total = sum(c.percent for c in rim.cells)
+                if abs(total - 100) > 0.5:
+                    where = " × ".join(rim.variables)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Targets for {where} add to {total:.1f}%, not 100%. "
+                            "Adjust them to total 100%."
+                        ),
+                    )
 
 
 @app.post(

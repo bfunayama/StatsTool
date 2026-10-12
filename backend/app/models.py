@@ -109,11 +109,19 @@ class WeightCell(BaseModel):
 class WeightRim(BaseModel):
     """A control the weights must match: a variable (marginal) or several
     variables crossed (interlocked). ``missing`` chooses how blanks are treated.
+
+    ``basis`` controls how an interlocked rim's targets are read. ``overall``
+    (default) treats each cell's percent as a joint share (all cells sum to
+    100%). ``column`` (only for two crossed variables) treats the percents as
+    distributions *within* each category of the second variable (each column
+    sums to 100%); the backend rebases them by that variable's observed share,
+    so its marginal split is preserved.
     """
 
     id: str
     variables: list[str]
     missing: Literal["exclude", "category"] = "exclude"
+    basis: Literal["overall", "column"] = "overall"
     cells: list[WeightCell] = Field(default_factory=list)
 
 

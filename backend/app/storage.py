@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import uuid
 import zipfile
@@ -33,6 +34,14 @@ from .template import apply_template
 _ROOT = Path(__file__).resolve().parents[2] / "data"
 SETS_DIR = _ROOT / "sets"
 PROJECTS_DIR = _ROOT / "projects"
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via a temp file + atomic rename so a concurrent reader never sees a
+    half-written (empty) file."""
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def new_dataset_id() -> str:
@@ -59,9 +68,7 @@ def create_data(df: pd.DataFrame, record: DataSet) -> None:
     folder = _set_dir(record.id)
     folder.mkdir(parents=True, exist_ok=True)
     df.to_parquet(_data_path(record.id), index=False)
-    _dataset_path(record.id).write_text(
-        record.model_dump_json(indent=2), encoding="utf-8"
-    )
+    _atomic_write_text(_dataset_path(record.id), record.model_dump_json(indent=2))
 
 
 def load_data_record(data_id: str) -> DataSet:
@@ -105,7 +112,7 @@ def create_project(meta: DatasetMeta) -> None:
     """Write a project's analysis metadata to disk."""
     folder = _project_dir(meta.id)
     folder.mkdir(parents=True, exist_ok=True)
-    _project_path(meta.id).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
+    _atomic_write_text(_project_path(meta.id), meta.model_dump_json(indent=2))
 
 
 def dataset_exists(project_id: str) -> bool:
@@ -119,7 +126,7 @@ def load_meta(project_id: str) -> DatasetMeta:
 
 
 def save_meta(meta: DatasetMeta) -> None:
-    _project_path(meta.id).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
+    _atomic_write_text(_project_path(meta.id), meta.model_dump_json(indent=2))
 
 
 def load_data(project_id: str) -> pd.DataFrame:
@@ -269,7 +276,7 @@ def import_project_zip(raw: bytes) -> DatasetMeta:
     folder = _set_dir(data.id)
     folder.mkdir(parents=True, exist_ok=True)
     _data_path(data.id).write_bytes(archive.read("data.parquet"))
-    _dataset_path(data.id).write_text(data.model_dump_json(indent=2), encoding="utf-8")
+    _atomic_write_text(_dataset_path(data.id), data.model_dump_json(indent=2))
     meta.id = new_dataset_id()
     meta.data_id = data.id
     create_project(meta)
@@ -401,9 +408,7 @@ def refresh_data(
     tmp = data_path.with_suffix(".parquet.tmp")
     df.to_parquet(tmp, index=False)
     tmp.replace(data_path)
-    _dataset_path(data_id).write_text(
-        new_record.model_dump_json(indent=2), encoding="utf-8"
-    )
+    _atomic_write_text(_dataset_path(data_id), new_record.model_dump_json(indent=2))
     for new_meta in refitted:
         save_meta(new_meta)
     report.committed = True

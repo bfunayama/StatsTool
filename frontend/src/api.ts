@@ -60,6 +60,9 @@ export interface WeightRim {
   id: string
   variables: string[]
   missing: 'exclude' | 'category'
+  // 'overall' = cells are joint shares (grid sums to 100%); 'column' = cells are
+  // distributions within each column variable category (each column sums to 100%).
+  basis: 'overall' | 'column'
   cells: WeightCell[]
 }
 
