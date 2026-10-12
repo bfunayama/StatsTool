@@ -843,6 +843,20 @@ export function CrosstabView({ meta, onChanged }: Props) {
   }
 
   function copySelected() {
+    // With no tables ticked, duplicate the highlighted folder (one at a time);
+    // only the folder itself gets "(copy)" appended, children keep their names.
+    if (exportSel.size === 0) {
+      const folder = activeFolderId ? findNode(tree, activeFolderId) : null
+      if (!folder || folder.kind !== 'folder') return
+      const parent = findParentId(tree, folder.id, null) ?? null
+      const copy = {
+        ...duplicateNode(folder, false),
+        name: `${folder.name} (copy)`,
+      }
+      persistTree(insertNode(tree, parent, copy))
+      setActiveFolderId(copy.id)
+      return
+    }
     let next = tree
     let created = 0
     // Duplicate each ticked table into its own parent folder.
@@ -2479,8 +2493,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
           </button>
           <button
             onClick={copySelected}
-            disabled={exportSel.size === 0}
-            title="Duplicate the ticked tables into the same folder"
+            disabled={exportSel.size === 0 && !activeFolderId}
+            title="Duplicate the ticked tables, or the highlighted folder, into the same place"
           >
             Duplicate selected{exportSel.size > 0 ? ` (${exportSel.size})` : ''}
           </button>
