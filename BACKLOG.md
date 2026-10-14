@@ -9,6 +9,45 @@ These are roadmap capabilities from the README that are **not yet built**:
 
 ---
 
+## Rule-based Variable creation (IF / AND / OR logic)
+
+**Status:** Backlog
+**Requested:** 2026-10-13
+
+### Summary
+A tool to create a new variable by defining logical rules over existing variables, e.g.
+"IF age >= 65 AND region = 'North' THEN 'Older North'". Each rule maps a condition to an
+output value/category; respondents matching no rule fall to a default/else (or missing).
+
+### Behaviour
+- Analyst builds an ordered list of **rules**; each rule = a condition → output category.
+- Conditions support **AND / OR** grouping across multiple clauses, each clause being
+  `variable operator value` (reuse the existing filter condition operators).
+- Rules evaluate top-down; first match wins (mutually exclusive output), with an **else**
+  category for unmatched respondents (or leave missing).
+- Can produce a **Pick One** categorical variable (first-match) now; consider a Pick Any
+  (any matching rule sets its member) variant later.
+- Output variable lands in the Variables tab and is usable in filters, crosstabs, banners,
+  drivers, charts, export.
+
+### Notes
+- Reuse / generalise the existing **filter condition** model (`filters.py`,
+  `cond.variable` + operator + value; banner segments use similar condition logic) so the
+  condition builder UI and evaluation are shared rather than reinvented.
+- Persist the rule set on the derived `Variable` (a new recode kind, e.g. `rules`) so it
+  can be edited and re-evaluated; keep references valid (prune if a source var is deleted).
+- Validate: unknown variables/values, empty conditions, duplicate/one-100%-style issues
+  surfaced inline.
+
+### Acceptance criteria
+- [ ] Analyst can add ordered rules with AND/OR condition groups and an output category.
+- [ ] Unmatched respondents go to a defined else category (or missing).
+- [ ] The created variable appears in the Variables tab and works in a crosstab, filter,
+      and driver analysis.
+- [ ] The rule set persists across save/reopen and can be edited later.
+
+---
+
 ## Export to PowerPoint
 
 **Status:** Backlog (README roadmap item)
@@ -100,9 +139,20 @@ both the Crosstabs module and the Variables tab.
 
 ## Text Variable Coding Tool (verbatim categorisation)
 
-**Status:** Backlog
+**Status:** ✅ Shipped (v1, 2026-10-13)
 **Requested:** 2026-10-13
 **Similar to:** Displayr's text categorisation / manual coding tool.
+
+**Shipped v1:** Launched from the Variables tab via **New variable… → Code open-ended
+text**. Dual-pane coder: left pane lists **distinct** verbatims with counts (identical
+responses grouped, e.g. `n/a (9)`, plus a `(No answer)` bucket); right pane holds flat
+categories showing live `(col%, n=…)`. Plain / Shift / ⌘-Ctrl multi-select; click a
+category to assign/unassign the selection. Produces **Pick One** (categorical) or
+**Pick Any** (`multi` question of binary members); uncoded → missing. Coded variables are
+re-openable/editable (**Edit codes…**) and work in filters/crosstabs/drivers/export.
+Backend: `code_one`/`code_any` recodes (computed on the fly, keyed by verbatim value),
+`GET …/verbatims`, `POST …/variables/text-code`. **v1 limitations:** single-level
+categories only (no nesting); no auto/AI coding; single source column.
 
 ### Summary
 A tool for manually coding open-ended ("verbatim") text responses into analyst-defined

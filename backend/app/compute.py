@@ -16,6 +16,8 @@ from .models import (
     BandRecode,
     BinaryRecode,
     CoalesceRecode,
+    CodeAnyRecode,
+    CodeOneRecode,
     CompactSelectRecode,
     Question,
     QuestionItem,
@@ -64,6 +66,10 @@ def label_order(var: Variable) -> list[str] | None:
         return [var.recode.false_label, var.recode.true_label]
     if isinstance(var.recode, CompactSelectRecode):
         return [var.recode.value]
+    if isinstance(var.recode, CodeOneRecode):
+        return var.recode.categories or None
+    if isinstance(var.recode, CodeAnyRecode):
+        return [var.recode.category]
     if isinstance(var.recode, CoalesceRecode):
         labels = [v.label for v in var.values if not v.missing]
         return labels or None
@@ -145,6 +151,10 @@ def compute_display_series(
         return _apply_binary(raw, var.recode)
     if isinstance(var.recode, CompactSelectRecode):
         return _apply_compact_select(raw, var.recode)
+    if isinstance(var.recode, CodeOneRecode):
+        return _apply_code_one(raw, var.recode)
+    if isinstance(var.recode, CodeAnyRecode):
+        return _apply_code_any(raw, var.recode)
     return _apply_values(raw, var.values)
 
 
@@ -202,6 +212,26 @@ def _apply_compact_select(raw: pd.Series, recode: CompactSelectRecode) -> pd.Ser
         return recode.value if recode.value in parts else pd.NA
 
     return raw.map(convert).astype("object")
+
+
+def _code_key(value) -> str:
+    """Normalise a verbatim to its coding key; blank/missing -> ""."""
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def _apply_code_one(raw: pd.Series, recode: CodeOneRecode) -> pd.Series:
+    """Manual Pick One: map each verbatim to its assigned category (else missing)."""
+    return raw.map(lambda v: recode.assignments.get(_code_key(v), pd.NA)).astype("object")
+
+
+def _apply_code_any(raw: pd.Series, recode: CodeAnyRecode) -> pd.Series:
+    """One Pick Any member: the category label when its verbatim is assigned here."""
+    allowed = set(recode.values)
+    return raw.map(
+        lambda v: recode.category if _code_key(v) in allowed else pd.NA
+    ).astype("object")
 
 
 def _coalesce_series(

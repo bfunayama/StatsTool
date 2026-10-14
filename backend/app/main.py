@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import uuid
 
 import pandas as pd
 from fastapi import FastAPI, Form, HTTPException, UploadFile
@@ -30,6 +31,8 @@ from .models import (
     CoalesceRecode,
     CoalesceRequest,
     CoalesceSourceInfo,
+    CodeAnyRecode,
+    CodeOneRecode,
     Combination,
     CombinationsRequest,
     CombinationsResponse,
@@ -54,11 +57,18 @@ from .models import (
     CompactOption,
     PreviewResponse,
     ProjectCreate,
+    Question,
+    QuestionItem,
+    QuestionKind,
     QuestionsUpdate,
     RefreshReport,
+    TextCodeRequest,
+    ValueAttribute,
     Variable,
     VariablesUpdate,
     VariableType,
+    VerbatimItem,
+    VerbatimsResponse,
     WeightPreview,
     WeightRequest,
     WeightSpec,
@@ -465,7 +475,111 @@ def pick_any_compact(dataset_id: str, payload: PickAnyCompactRequest) -> Dataset
     return meta
 
 
-def _default_coalesce_label(labels: list[str]) -> str:
+def _verbatim_series(meta: DatasetMeta, df, var: Variable):
+    """The trimmed text of a variable, resolving derived sources."""
+    index = compute.build_index(meta.variables)
+    return compute._source_series(df, index, var.name, set())
+
+
+@app.get(
+    "/api/datasets/{dataset_id}/variables/{name}/verbatims",
+    response_model=VerbatimsResponse,
+)
+def variable_verbatims(dataset_id: str, name: str) -> VerbatimsResponse:
+    """Distinct open-ended responses with counts, for the text-coding tool."""
+    meta, df = _load(dataset_id)
+    var = _require_variable(meta, name)
+    series = _verbatim_series(meta, df, var)
+    counts = series.dropna().astype(str).value_counts()
+    items = [VerbatimItem(value=str(v), count=int(c)) for v, c in counts.items()]
+    items.sort(key=lambda it: (-it.count, it.value.lower()))
+    blank = int(len(df)) - int(series.notna().sum())
+    if blank > 0:
+        items.append(VerbatimItem(value="", count=blank))
+    return VerbatimsResponse(total=int(len(df)), verbatims=items)
+
+
+def _remove_text_code_target(meta: DatasetMeta, replace: str) -> None:
+    """Remove an existing coded variable (Pick One name) or question (Pick Any id)
+    so it can be re-saved in place, keeping the same identity."""
+    q = next((q for q in meta.questions if q.id == replace), None)
+    if q is not None:
+        members = {it.column for it in q.items}
+        meta.questions = [x for x in meta.questions if x.id != replace]
+        meta.variables = [v for v in meta.variables if v.name not in members]
+        return
+    meta.variables = [v for v in meta.variables if v.name != replace]
+
+
+@app.post("/api/datasets/{dataset_id}/variables/text-code", response_model=DatasetMeta)
+def text_code(dataset_id: str, payload: TextCodeRequest) -> DatasetMeta:
+    """Create (or re-save) a coded variable from an open-ended text column."""
+    meta, df = _load(dataset_id)
+    src = _require_variable(meta, payload.source_variable)
+    cats = [c for c in payload.categories if c.label.strip()]
+    if not cats:
+        raise HTTPException(status_code=400, detail="Add at least one category.")
+    labels = [c.label.strip() for c in cats]
+    if len(set(labels)) != len(labels):
+        raise HTTPException(status_code=400, detail="Category names must be unique.")
+    label = payload.new_label.strip() or src.label
+
+    # Re-save in place (keep the same identity) when editing an existing coding.
+    keep_qid: str | None = None
+    if payload.replace:
+        q = next((q for q in meta.questions if q.id == payload.replace), None)
+        if q is not None:
+            keep_qid = q.id
+        _remove_text_code_target(meta, payload.replace)
+
+    existing = {v.name for v in meta.variables}
+    if payload.mode == "one":
+        assignments: dict[str, str] = {}
+        for cat in cats:
+            for verbatim in cat.values:
+                assignments[verbatim] = cat.label.strip()
+        values = [
+            ValueAttribute(source_value=lbl, value=float(i + 1), label=lbl)
+            for i, lbl in enumerate(labels)
+        ]
+        var = Variable(
+            name=compute.unique_name(label, existing),
+            label=label,
+            type=VariableType.categorical,
+            source_name=src.name,
+            values=values,
+            recode=CodeOneRecode(categories=labels, assignments=assignments),
+        )
+        meta.variables.append(var)
+    else:
+        qid = keep_qid or uuid.uuid4().hex
+        members: list[Variable] = []
+        items: list[QuestionItem] = []
+        for cat in cats:
+            lbl = cat.label.strip()
+            nm = compute.unique_name(f"{label}: {lbl}", existing)
+            existing.add(nm)
+            members.append(
+                Variable(
+                    name=nm,
+                    label=lbl,
+                    type=VariableType.categorical,
+                    source_name=src.name,
+                    values=[ValueAttribute(source_value=lbl, value=1.0, label=lbl)],
+                    recode=CodeAnyRecode(category=lbl, values=list(cat.values)),
+                    question_id=qid,
+                )
+            )
+            items.append(QuestionItem(column=nm, label=lbl))
+        meta.variables.extend(members)
+        meta.questions.append(
+            Question(id=qid, name=label, label=label, kind=QuestionKind.multi, items=items)
+        )
+        detect.apply_membership(meta.variables, meta.questions)
+
+    storage.save_meta(meta)
+    return meta
+
     """A sensible merged label: the shared stem after the first ' - ', else '(combined)'."""
     if labels and all(" - " in lbl for lbl in labels):
         stems = {lbl.split(" - ", 1)[1].strip() for lbl in labels}

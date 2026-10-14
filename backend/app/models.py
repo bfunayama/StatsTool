@@ -89,8 +89,36 @@ class CoalesceRecode(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
+class CodeOneRecode(BaseModel):
+    """Manual Pick One coding of an open-ended text column: each distinct verbatim
+    value maps to a single analyst category. Unmapped verbatims become missing.
+    The empty-string key ("") stands for blank / no-answer responses.
+    """
+
+    kind: Literal["code_one"] = "code_one"
+    categories: list[str] = Field(default_factory=list)  # display order
+    assignments: dict[str, str] = Field(default_factory=dict)  # verbatim -> category
+
+
+class CodeAnyRecode(BaseModel):
+    """One category of a manual Pick Any text coding: selected when the respondent's
+    verbatim is among ``values`` (else missing). "" stands for blank responses.
+    """
+
+    kind: Literal["code_any"] = "code_any"
+    category: str
+    values: list[str] = Field(default_factory=list)  # verbatims assigned here
+
+
 Recode = Annotated[
-    Union[BandRecode, BinaryRecode, CompactSelectRecode, CoalesceRecode],
+    Union[
+        BandRecode,
+        BinaryRecode,
+        CompactSelectRecode,
+        CoalesceRecode,
+        CodeOneRecode,
+        CodeAnyRecode,
+    ],
     Field(discriminator="kind"),
 ]
 
@@ -361,6 +389,46 @@ class CompactOption(BaseModel):
 
     label: str
     count: int
+
+
+class VerbatimItem(BaseModel):
+    """One distinct open-ended response with how many respondents gave it.
+
+    ``value`` is the trimmed verbatim text; an empty string represents blank /
+    no-answer responses so they can be coded too.
+    """
+
+    value: str
+    count: int
+
+
+class VerbatimsResponse(BaseModel):
+    """Distinct verbatims of a text column (for the coding tool's left pane)."""
+
+    total: int  # total respondents (denominator for category %)
+    verbatims: list[VerbatimItem]
+
+
+class TextCodeCategory(BaseModel):
+    """An analyst category and the verbatims assigned to it ("" = blank responses)."""
+
+    label: str
+    values: list[str] = Field(default_factory=list)
+
+
+class TextCodeRequest(BaseModel):
+    """Create (or re-save) a coded variable from an open-ended text column.
+
+    ``mode`` is ``one`` for a mutually exclusive categorical variable or ``any``
+    for a pick-any question of binary members. ``replace`` re-saves an existing
+    coding in place: the variable name for ``one``, or the question id for ``any``.
+    """
+
+    source_variable: str
+    mode: Literal["one", "any"]
+    new_label: str
+    categories: list[TextCodeCategory] = Field(default_factory=list)
+    replace: str | None = None
 
 
 class PickAnyCompactPreview(BaseModel):

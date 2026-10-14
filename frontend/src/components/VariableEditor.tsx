@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { WeightDialog } from './WeightDialog'
 import {
+  NewVariableDialog,
+  TextCodeDialog,
+  type TextCodeInitial,
+} from './TextCodeDialog'
+import {
   bandVariable,
   binaryVariable,
   coalesceVariable,
@@ -14,6 +19,7 @@ import {
   updateVariables,
   type Band,
   type CoalescePreview,
+  type CodeAnyRecode,
   type DatasetMeta,
   type DistinctValue,
   type PickAnyCompactPreview,
@@ -67,6 +73,10 @@ export function VariableEditor({ meta, onChanged }: Props) {
   const [binaryFor, setBinaryFor] = useState<Variable | null>(null)
   const [pickAnyFor, setPickAnyFor] = useState<Variable | null>(null)
   const [combineOpen, setCombineOpen] = useState(false)
+  const [newVarOpen, setNewVarOpen] = useState(false)
+  const [textCode, setTextCode] = useState<{ initial: TextCodeInitial | null } | null>(
+    null,
+  )
   const [confirmAction, setConfirmAction] = useState<{
     title: string
     message: string
@@ -269,6 +279,53 @@ export function VariableEditor({ meta, onChanged }: Props) {
     })
   }
 
+  // Rebuild a coding job from a saved coded variable / question so it can be edited.
+  function editCodesForVariable(v: Variable) {
+    if (v.recode?.kind !== 'code_one' || !v.source_name) return
+    const byCat = new Map<string, string[]>()
+    for (const [value, cat] of Object.entries(v.recode.assignments))
+      byCat.set(cat, [...(byCat.get(cat) ?? []), value])
+    setTextCode({
+      initial: {
+        sourceVariable: v.source_name,
+        mode: 'one',
+        label: v.label,
+        categories: v.recode.categories.map((c) => ({
+          label: c,
+          values: byCat.get(c) ?? [],
+        })),
+        replace: v.name,
+      },
+    })
+  }
+
+  function editCodesForQuestion(q: Question) {
+    const members = q.items
+      .map((it) => variables.find((v) => v.name === it.column))
+      .filter((v): v is Variable => v?.recode?.kind === 'code_any')
+    const source = members[0]?.source_name
+    if (!source) return
+    setTextCode({
+      initial: {
+        sourceVariable: source,
+        mode: 'any',
+        label: q.label,
+        categories: members.map((m) => {
+          const r = m.recode as CodeAnyRecode
+          return { label: r.category, values: r.values }
+        }),
+        replace: q.id,
+      },
+    })
+  }
+
+  function questionIsCoded(q: Question) {
+    return q.items.some((it) => {
+      const mv = variables.find((v) => v.name === it.column)
+      return mv?.recode?.kind === 'code_any'
+    })
+  }
+
   async function save() {
     setSaving(true)
     setError(null)
@@ -306,6 +363,13 @@ export function VariableEditor({ meta, onChanged }: Props) {
         </span>
         <span className="spacer" />
         {dirty && <span className="muted">Unsaved changes</span>}
+        <button
+          onClick={() => setNewVarOpen(true)}
+          disabled={dirty}
+          title={dirty ? 'Save changes first' : undefined}
+        >
+          New variable…
+        </button>
         <button
           onClick={() => setCombineOpen(true)}
           disabled={dirty}
@@ -360,6 +424,9 @@ export function VariableEditor({ meta, onChanged }: Props) {
                     }
                     onRemoveItem={(column) => removeQuestionItem(q.id, column)}
                     onUngroup={() => ungroupQuestion(q.id)}
+                    onEditCodes={
+                      questionIsCoded(q) ? () => editCodesForQuestion(q) : undefined
+                    }
                     onDelete={
                       questionIsDerived(q) ? () => deleteQuestion(q) : undefined
                     }
@@ -385,6 +452,11 @@ export function VariableEditor({ meta, onChanged }: Props) {
                   onBinary={() => setBinaryFor(v)}
                   onPickAny={() => setPickAnyFor(v)}
                   onEditWeight={() => setWeightDialog({ initial: v })}
+                  onEditCodes={
+                    v.recode?.kind === 'code_one'
+                      ? () => editCodesForVariable(v)
+                      : undefined
+                  }
                   onDelete={() =>
                     setConfirmAction({
                       title: 'Delete variable',
@@ -447,6 +519,27 @@ export function VariableEditor({ meta, onChanged }: Props) {
           }}
         />
       )}
+      {newVarOpen && (
+        <NewVariableDialog
+          onClose={() => setNewVarOpen(false)}
+          onChooseText={() => {
+            setNewVarOpen(false)
+            setTextCode({ initial: null })
+          }}
+        />
+      )}
+      {textCode && (
+        <TextCodeDialog
+          datasetId={meta.id}
+          textVariables={variables.filter((v) => v.type === 'text' && !v.hidden)}
+          initial={textCode.initial}
+          onClose={() => setTextCode(null)}
+          onCreated={(m) => {
+            setTextCode(null)
+            onChanged(m)
+          }}
+        />
+      )}
       {confirmAction && (
         <Modal title={confirmAction.title} onClose={() => setConfirmAction(null)}>
           <p className="muted">{confirmAction.message}</p>
@@ -495,6 +588,7 @@ interface RowProps {
   onBinary: () => void
   onPickAny: () => void
   onEditWeight: () => void
+  onEditCodes?: () => void
   onDelete: () => void
   onToggleHidden: () => void
 }
@@ -509,6 +603,7 @@ function QuestionRow({
   onAxisLabel,
   onRemoveItem,
   onUngroup,
+  onEditCodes,
   onDelete,
 }: {
   question: Question
@@ -520,6 +615,7 @@ function QuestionRow({
   onAxisLabel: (axis: 'rows' | 'columns', key: string, label: string) => void
   onRemoveItem: (column: string) => void
   onUngroup: () => void
+  onEditCodes?: () => void
   onDelete?: () => void
 }) {
   return (
@@ -554,6 +650,7 @@ function QuestionRow({
         <td>
           <div className="row-actions">
             <span className="muted">{question.items.length} cols</span>
+            {onEditCodes && <button onClick={onEditCodes}>Edit codes…</button>}
             <button onClick={onUngroup}>Ungroup</button>
             {onDelete && (
               <button className="danger" onClick={onDelete}>
@@ -696,6 +793,7 @@ function VariableRow({
   onBinary,
   onPickAny,
   onEditWeight,
+  onEditCodes,
   onDelete,
   onToggleHidden,
 }: RowProps) {
@@ -766,6 +864,15 @@ function VariableRow({
                 <button onClick={onCopy} disabled={dirty} title={disabledTitle}>
                   Copy
                 </button>
+                {onEditCodes && (
+                  <button
+                    onClick={onEditCodes}
+                    disabled={dirty}
+                    title={disabledTitle}
+                  >
+                    Edit codes…
+                  </button>
+                )}
                 {isNumeric && (
                   <button onClick={onBand} disabled={dirty} title={disabledTitle}>
                     Band…

@@ -45,11 +45,25 @@ export interface CoalesceRecode {
   sources: string[]
 }
 
+export interface CodeOneRecode {
+  kind: 'code_one'
+  categories: string[]
+  assignments: Record<string, string>
+}
+
+export interface CodeAnyRecode {
+  kind: 'code_any'
+  category: string
+  values: string[]
+}
+
 export type Recode =
   | BandRecode
   | BinaryRecode
   | CompactSelectRecode
   | CoalesceRecode
+  | CodeOneRecode
+  | CodeAnyRecode
 
 export interface WeightCell {
   values: string[]
@@ -734,6 +748,46 @@ export function pickAnyCompact(
   return postJson(`/api/datasets/${id}/variables/pick-any-compact`, {
     source_variable,
     delimiter: delimiter ?? null,
+  })
+}
+
+export interface VerbatimItem {
+  value: string
+  count: number
+}
+
+export interface VerbatimsResponse {
+  total: number
+  verbatims: VerbatimItem[]
+}
+
+export function getVerbatims(
+  id: string,
+  variable: string,
+): Promise<VerbatimsResponse> {
+  return fetch(
+    `/api/datasets/${id}/variables/${encodeURIComponent(variable)}/verbatims`,
+  ).then(handle<VerbatimsResponse>)
+}
+
+export interface TextCodeCategory {
+  label: string
+  values: string[]
+}
+
+export function createTextCode(
+  id: string,
+  payload: {
+    source_variable: string
+    mode: 'one' | 'any'
+    new_label: string
+    categories: TextCodeCategory[]
+    replace?: string | null
+  },
+): Promise<DatasetMeta> {
+  return postJson(`/api/datasets/${id}/variables/text-code`, {
+    ...payload,
+    replace: payload.replace ?? null,
   })
 }
 
