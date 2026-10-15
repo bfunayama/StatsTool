@@ -4,6 +4,7 @@ import {
   useState,
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from 'react'
 import {
   runCrosstab,
@@ -301,6 +302,32 @@ export function CrosstabView({ meta, onChanged }: Props) {
     return out
   }, [meta.variables, meta.questions])
 
+  // Column choices in data-file order: standalone variables and Pick-any
+  // questions interleaved, just like the row picker (variables keep a plain
+  // name value; a question uses "q:<id>"). Grid questions can't be a column.
+  const colChoices = useMemo(() => {
+    const byColumn = new Map<string, string>()
+    for (const q of meta.questions ?? [])
+      for (const it of q.items) byColumn.set(it.column, q.id)
+    const out: { value: string; label: string }[] = []
+    const emitted = new Set<string>()
+    for (const v of meta.variables) {
+      if (v.type === 'weight') continue
+      const qid = byColumn.get(v.name)
+      if (qid) {
+        const q = (meta.questions ?? []).find((x) => x.id === qid)
+        if (q && q.kind === 'multi' && !emitted.has(q.id)) {
+          emitted.add(q.id)
+          out.push({ value: `q:${q.id}`, label: q.label })
+        }
+        continue
+      }
+      if (v.hidden) continue
+      out.push({ value: v.name, label: v.label })
+    }
+    return out
+  }, [meta.variables, meta.questions])
+
   const [rowValue, setRowValue] = useState('')
   const [colValue, setColValue] = useState(TOTAL)
   // Correlation: the column grid question id ('' = correlate the row grid with
@@ -498,13 +525,23 @@ export function CrosstabView({ meta, onChanged }: Props) {
       )
   }
 
+  // Translate the column picker into the request's column/banner. A Pick-Any
+  // question (colValue "q:<id>") becomes a one-segment banner of its options.
+  function columnPayload(): { column: string | null; banner: BannerSegment[] } {
+    if (advancedBanner) return { column: null, banner: bannerSegments }
+    if (colValue.startsWith('q:'))
+      return { column: null, banner: [{ variables: [], question: colValue.slice(2) }] }
+    return { column: colValue === TOTAL ? null : colValue, banner: [] }
+  }
+
   function currentSpec(): SavedCrosstabSpec | null {
     const row = decodeRow(rowValue)
     if (!row || !hasColumn) return null
+    const colPay = columnPayload()
     return {
       row,
-      column: advancedBanner ? null : colValue === TOTAL ? null : colValue,
-      banner: bannerSegments,
+      column: colPay.column,
+      banner: colPay.banner,
       filter_id: filterId || null,
       weight: weightId || null,
       display: {
@@ -537,8 +574,21 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   function loadSpec(spec: SavedCrosstabSpec) {
     setRowValue(encodeRow(spec.row))
-    setColValue(spec.column ?? TOTAL)
-    setBannerSegments(spec.banner ?? [])
+    const b = spec.banner ?? []
+    // A single Pick-Any question segment shows in the Column picker, not the
+    // advanced banner builder.
+    if (
+      !spec.column &&
+      b.length === 1 &&
+      b[0].question &&
+      (b[0].variables?.length ?? 0) === 0
+    ) {
+      setColValue(`q:${b[0].question}`)
+      setBannerSegments([])
+    } else {
+      setColValue(spec.column ?? TOTAL)
+      setBannerSegments(b)
+    }
     setBannerGroups(spec.banner_groups ?? [])
     setFilterId(spec.filter_id ?? '')
     setWeightId(spec.weight ?? '')
@@ -891,6 +941,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
   }
 
   function colLabelFor(name: string): string {
+    if (name.startsWith('q:')) {
+      const id = name.slice(2)
+      return (meta.questions ?? []).find((q) => q.id === id)?.label ?? name
+    }
     return meta.variables.find((v) => v.name === name)?.label ?? name
   }
 
@@ -910,10 +964,11 @@ export function CrosstabView({ meta, onChanged }: Props) {
     let ignore = false
     setLoading(true)
     setError(null)
+    const colPay = columnPayload()
     runCrosstab(meta.id, {
       row,
-      column: advancedBanner ? null : colValue === TOTAL ? null : colValue,
-      banner: advancedBanner ? bannerSegments : [],
+      column: colPay.column,
+      banner: colPay.banner,
       bannerGroups: advancedBanner ? bannerGroups : [],
       filterId: filterId || null,
       weight: weightId || null,
@@ -1053,6 +1108,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Build the column condition(s) for a cell's column, or null for a Total
   // column, or a string when the column type isn't supported yet.
   function columnConditions(col: CrosstabColumn): Condition[] | null | string {
+    // Pick-Any question column: each option maps to its member variable.
+    if (!advancedBanner && colValue.startsWith('q:')) {
+      const q = multiQuestions.find((x) => x.id === colValue.slice(2))
+      const item = q?.items.find((it) => it.label === col.label)
+      return item ? [cond(item.column, [col.label])] : null
+    }
     const seg = col.seg ?? -1
     if (seg < 0) {
       // Legacy single-column path.
@@ -1671,7 +1732,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // either axis (a grouped/Pick-any row can't move to the column banner).
   const canSwap = (() => {
     const row = decodeRow(rowValue)
-    if (advancedBanner || !row || !colValue) return false
+    if (advancedBanner || !row || !colValue || colValue.startsWith('q:'))
+      return false
     const rowOk = row.kind === 'variable' || row.kind === 'total'
     const rowIsVar = row.kind === 'variable'
     const colIsVar = colValue !== TOTAL
@@ -2361,7 +2423,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setDropInfo(null)
   }
 
-  function renderNodes(nodes: CrosstabNode[], depth: number) {
+  function renderNodes(nodes: CrosstabNode[], depth: number): ReactNode[] {
     return nodes.flatMap((node) => {
       const isFolder = node.kind === 'folder'
       const isCollapsed = collapsed.has(node.id)
@@ -2619,9 +2681,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
           >
             <option value="">Choose a variable…</option>
             <option value={TOTAL}>Total sample (no column)</option>
-            {memberless.map((v) => (
-              <option key={v.name} value={v.name}>
-                {v.label}
+            {colChoices.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
               </option>
             ))}
           </select>

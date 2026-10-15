@@ -15,6 +15,7 @@ import io
 import json
 import os
 import shutil
+import sys
 import uuid
 import zipfile
 from pathlib import Path
@@ -31,9 +32,27 @@ from .models import (
 )
 from .template import apply_template
 
-_ROOT = Path(__file__).resolve().parents[2] / "data"
+
+def _data_root() -> Path:
+    """Where datasets and projects live — always on this machine.
+
+    Override with ``STATSTOOL_DATA_DIR``. A packaged (frozen) build defaults to a
+    per-user Application Support folder (not synced to iCloud); in dev it's the
+    repo's ``data/`` folder.
+    """
+    override = os.environ.get("STATSTOOL_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    if getattr(sys, "frozen", False):
+        return Path.home() / "Library" / "Application Support" / "StatsTool" / "data"
+    return Path(__file__).resolve().parents[2] / "data"
+
+
+_ROOT = _data_root()
 SETS_DIR = _ROOT / "sets"
 PROJECTS_DIR = _ROOT / "projects"
+SETS_DIR.mkdir(parents=True, exist_ok=True)
+PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:

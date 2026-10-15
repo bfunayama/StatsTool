@@ -218,7 +218,10 @@ export interface CrosstabRowSpec {
 
 export interface CrosstabCell {
   count: number
-  column_pct: number | null  corr?: number | null  corr_sig?: boolean | null  sig_higher?: string[]
+  column_pct: number | null
+  corr?: number | null
+  corr_sig?: boolean | null
+  sig_higher?: string[]
   sig_arrow?: 'up' | 'down' | null
 }
 

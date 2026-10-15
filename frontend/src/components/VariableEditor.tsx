@@ -55,10 +55,13 @@ function valuesForRecode(recode: Recode): ValueAttribute[] {
       missing: false,
     }))
   }
-  return [
-    { source_value: recode.false_label, value: 0, label: recode.false_label, missing: false },
-    { source_value: recode.true_label, value: 1, label: recode.true_label, missing: false },
-  ]
+  if (recode.kind === 'binary') {
+    return [
+      { source_value: recode.false_label, value: 0, label: recode.false_label, missing: false },
+      { source_value: recode.true_label, value: 1, label: recode.true_label, missing: false },
+    ]
+  }
+  return []
 }
 
 export function VariableEditor({ meta, onChanged }: Props) {
