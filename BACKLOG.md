@@ -9,6 +9,48 @@ These are roadmap capabilities from the README that are **not yet built**:
 
 ---
 
+## Small bugs & tweaks
+
+**Status:** Backlog
+**Added:** 2026-11-03
+
+- **Default New Table title** — preset a sensible default title for each new crosstab
+  (e.g. "{row} by {column}") so tables aren't untitled.
+- **Combined-variable name field loses focus on first keystroke** — bug: when naming a
+  newly created combined variable, the first keystroke deselects/blurs the input box.
+  Likely a re-render resetting the input; keep focus stable while typing.
+- **Reorder categories in the coding module** — let the analyst drag/reorder the
+  category list in the text-coding tool, and have that order flow through to the created
+  variable's value order (Pick One value codes / Pick Any member order).
+- **Coding module Save/Cancel not showing correctly** — the Save Changes / Cancel buttons
+  don't render properly; consider moving them **above** the coding panes (sticky header)
+  so they're always visible.
+
+---
+
+## Count-across-columns variable creation
+
+**Status:** Backlog
+**Added:** 2026-11-03
+
+### Summary
+A new variable-creation type that counts, per respondent, how many of a chosen set of
+columns meet a condition — producing a numeric (or banded categorical) variable.
+
+### Uses
+- **No. of brands selected** (count selected options across a pick-any set).
+- **Straightliner counts** (how many grid rows share the same answer / flag straightlining).
+- **Kano category** and similar derived classifications built from several columns.
+
+### Notes
+- Input: a set of columns (or a pick-any/grid question) + a "counts when" rule
+  (selected / equals value / non-missing).
+- Output: a numeric count variable (optionally banded into categories), landing in the
+  Variables tab and usable in filters/crosstabs/drivers/charts/export.
+- Sits alongside the other options in the **New variable** dialog.
+
+---
+
 ## Rule-based Variable creation (IF / AND / OR logic)
 
 **Status:** Backlog
