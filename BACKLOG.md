@@ -11,20 +11,18 @@ These are roadmap capabilities from the README that are **not yet built**:
 
 ## Small bugs & tweaks
 
-**Status:** Backlog
+**Status:** ✅ Shipped (2026-11-03)
 **Added:** 2026-11-03
 
-- **Default New Table title** — preset a sensible default title for each new crosstab
-  (e.g. "{row} by {column}") so tables aren't untitled.
-- **Combined-variable name field loses focus on first keystroke** — bug: when naming a
-  newly created combined variable, the first keystroke deselects/blurs the input box.
-  Likely a re-render resetting the input; keep focus stable while typing.
-- **Reorder categories in the coding module** — let the analyst drag/reorder the
-  category list in the text-coding tool, and have that order flow through to the created
-  variable's value order (Pick One value codes / Pick Any member order).
-- **Coding module Save/Cancel not showing correctly** — the Save Changes / Cancel buttons
-  don't render properly; consider moving them **above** the coding panes (sticky header)
-  so they're always visible.
+- ✅ **Default New Table title** — the crosstab Title field now shows the computed default
+  ("{row} by {column}") as its placeholder, and that name is used on save.
+- ✅ **Combined-variable name field loses focus on first keystroke** — fixed: `labelEdited`
+  is now a ref (not state) so typing no longer re-runs the preview effect that unmounted
+  the input.
+- ✅ **Reorder categories in the coding module** — ▲/▼ buttons reorder the category list;
+  the order flows through to the created variable's value/member order on save.
+- ✅ **Coding module Save/Cancel** — moved Cancel / Save into a sticky header; the modal is
+  a flex column so the panes scroll internally and the actions are always visible.
 
 ---
 

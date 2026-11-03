@@ -1193,6 +1193,16 @@ tr.hidden-var > td {
 .textcode-modal {
   max-width: 60rem;
   width: 94vw;
+  /* Flex column so the panes scroll internally and the header actions stay put. */
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+  overflow: hidden;
+}
+.textcode-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 .textcode-setup {
   display: flex;
@@ -1205,7 +1215,8 @@ tr.hidden-var > td {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
-  max-height: 60vh;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .textcode-pane {
   display: flex;
@@ -1286,6 +1297,18 @@ tr.hidden-var > td {
   border-radius: 4px;
   cursor: pointer;
   padding: 0 0.5rem;
+}
+.cat-move {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0 0.4rem;
+}
+.cat-move:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 .cat-assign.highlight {
   background: rgba(37, 99, 235, 0.12);

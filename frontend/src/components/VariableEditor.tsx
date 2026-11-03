@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { WeightDialog } from './WeightDialog'
 import {
   NewVariableDialog,
@@ -1575,7 +1575,9 @@ function CombineDialog({
   const [search, setSearch] = useState('')
   const [mode, setMode] = useState<'merge' | 'grid'>('merge')
   const [label, setLabel] = useState('')
-  const [labelEdited, setLabelEdited] = useState(false)
+  // A ref (not state) so typing in the name doesn't re-run the preview effect
+  // (which would unmount this input and drop focus on the first keystroke).
+  const labelEdited = useRef(false)
   const [preview, setPreview] = useState<CoalescePreview | null>(null)
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -1592,7 +1594,7 @@ function CombineDialog({
       .then((p) => {
         if (!active) return
         setPreview(p)
-        if (!labelEdited) setLabel(p.suggested_label)
+        if (!labelEdited.current) setLabel(p.suggested_label)
       })
       .catch((err) =>
         active && setError(err instanceof Error ? err.message : 'Preview failed'),
@@ -1601,7 +1603,7 @@ function CombineDialog({
     return () => {
       active = false
     }
-  }, [datasetId, selected, labelEdited])
+  }, [datasetId, selected])
 
   function toggle(name: string) {
     setError(null)
@@ -1727,7 +1729,7 @@ function CombineDialog({
               value={label}
               onChange={(e) => {
                 setLabel(e.target.value)
-                setLabelEdited(true)
+                labelEdited.current = true
               }}
             />
           </label>

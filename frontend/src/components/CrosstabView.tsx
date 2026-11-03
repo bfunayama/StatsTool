@@ -2607,7 +2607,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
             Title
             <input
               className="cell-input"
-              placeholder="Untitled table"
+              placeholder={
+                rowValue
+                  ? colValue && colValue !== TOTAL
+                    ? `${rowLabelFor(rowValue)} by ${colLabelFor(colValue)}`
+                    : rowLabelFor(rowValue)
+                  : 'Untitled table'
+              }
               value={titleDraft}
               onChange={(e) => setTitleDraft(e.target.value)}
             />

@@ -269,6 +269,18 @@ export function TextCodeDialog({
     setCategories((prev) => prev.filter((c) => c.id !== id))
   }
 
+  // Reorder categories; the saved variable's value/member order follows this.
+  function moveCategory(id: string, dir: -1 | 1) {
+    setCategories((prev) => {
+      const i = prev.findIndex((c) => c.id === id)
+      const j = i + dir
+      if (i < 0 || j < 0 || j >= prev.length) return prev
+      const next = prev.slice()
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
+  }
+
   // Switching to Pick One enforces one category per verbatim (keep the first).
   function changeMode(next: 'one' | 'any') {
     setMode(next)
@@ -322,9 +334,19 @@ export function TextCodeDialog({
       >
         <div className="modal-header">
           <h3>{editing ? 'Edit coded variable' : 'Code open-ended text'}</h3>
-          <button className="expand" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+          <div className="textcode-head-actions">
+            <button onClick={onClose}>Cancel</button>
+            <button className="primary" disabled={!canSave} onClick={save}>
+              {busy
+                ? 'Saving…'
+                : editing
+                  ? 'Save changes'
+                  : 'Create variable'}
+            </button>
+            <button className="expand" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="textcode-setup">
@@ -490,6 +512,22 @@ export function TextCodeDialog({
                       )}
                     </button>
                     <button
+                      className="cat-move"
+                      title="Move up"
+                      disabled={categories[0]?.id === c.id}
+                      onClick={() => moveCategory(c.id, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      className="cat-move"
+                      title="Move down"
+                      disabled={categories[categories.length - 1]?.id === c.id}
+                      onClick={() => moveCategory(c.id, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
                       className="cat-edit"
                       title="Rename"
                       onClick={() => setEditingCat(c.id)}
@@ -508,17 +546,6 @@ export function TextCodeDialog({
               })}
             </div>
           </div>
-        </div>
-
-        <div className="modal-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!canSave} onClick={save}>
-            {busy
-              ? 'Saving…'
-              : editing
-                ? 'Save changes'
-                : 'Create variable'}
-          </button>
         </div>
       </div>
     </div>
