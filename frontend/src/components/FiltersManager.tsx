@@ -297,7 +297,7 @@ function FilterEditor({
   )
 }
 
-function ConditionRow({
+export function ConditionRow({
   meta,
   condition,
   onChange,

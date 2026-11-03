@@ -1,6 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
-import { getDataset, projectExportUrl, type DatasetMeta } from './api'
+import {
+  getDataset,
+  projectExportUrl,
+  replaceMeta,
+  type DatasetMeta,
+} from './api'
 import { useBackdropDismiss } from './useBackdropDismiss'
 import { DatasetImport } from './components/DatasetImport'
 import { DataPreview } from './components/DataPreview'
@@ -27,6 +32,92 @@ function App() {
   const [saveIncludeData, setSaveIncludeData] = useState(true)
   const backdrop = useBackdropDismiss()
 
+  // Global, session-only undo/redo over whole-analysis snapshots. Edits route
+  // through recordAndSet; bursts within COALESCE_MS collapse to one step.
+  const metaRef = useRef<DatasetMeta | null>(null)
+  const undoRef = useRef<DatasetMeta[]>([])
+  const redoRef = useRef<DatasetMeta[]>([])
+  const lastChangeRef = useRef(0)
+  const [undoLen, setUndoLen] = useState(0)
+  const [redoLen, setRedoLen] = useState(0)
+  const COALESCE_MS = 500
+
+  const syncLens = useCallback(() => {
+    setUndoLen(undoRef.current.length)
+    setRedoLen(redoRef.current.length)
+  }, [])
+
+  const recordAndSet = useCallback(
+    (next: DatasetMeta) => {
+      const cur = metaRef.current
+      const now = Date.now()
+      if (cur && cur.id === next.id) {
+        if (now - lastChangeRef.current > COALESCE_MS) {
+          undoRef.current.push(cur)
+          if (undoRef.current.length > 100) undoRef.current.shift()
+          redoRef.current = []
+        }
+      } else {
+        undoRef.current = []
+        redoRef.current = []
+      }
+      lastChangeRef.current = now
+      metaRef.current = next
+      setMeta(next)
+      syncLens()
+    },
+    [syncLens],
+  )
+
+  const undo = useCallback(() => {
+    const cur = metaRef.current
+    if (!cur || undoRef.current.length === 0) return
+    const prev = undoRef.current.pop() as DatasetMeta
+    redoRef.current.push(cur)
+    lastChangeRef.current = 0
+    metaRef.current = prev
+    setMeta(prev)
+    syncLens()
+    replaceMeta(prev.id, prev).catch(() => {})
+  }, [syncLens])
+
+  const redo = useCallback(() => {
+    const cur = metaRef.current
+    if (!cur || redoRef.current.length === 0) return
+    const next = redoRef.current.pop() as DatasetMeta
+    undoRef.current.push(cur)
+    lastChangeRef.current = 0
+    metaRef.current = next
+    setMeta(next)
+    syncLens()
+    replaceMeta(next.id, next).catch(() => {})
+  }, [syncLens])
+
+  // Keyboard: ⌘Z / ⌘⇧Z (and Ctrl on Windows). Let native undo win inside fields.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      const key = e.key.toLowerCase()
+      const isUndo = key === 'z' && !e.shiftKey
+      const isRedo = (key === 'z' && e.shiftKey) || key === 'y'
+      if (!isUndo && !isRedo) return
+      const el = document.activeElement as HTMLElement | null
+      if (
+        el &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.isContentEditable)
+      )
+        return
+      e.preventDefault()
+      if (isRedo) redo()
+      else undo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
+
   function doSave() {
     if (!meta) return
     const a = document.createElement('a')
@@ -46,13 +137,21 @@ function App() {
     }
     localStorage.setItem(LAST_DATASET_KEY, datasetId)
     getDataset(datasetId)
-      .then(setMeta)
+      .then((m) => {
+        // A freshly loaded dataset starts a clean history.
+        undoRef.current = []
+        redoRef.current = []
+        lastChangeRef.current = 0
+        metaRef.current = m
+        setMeta(m)
+        syncLens()
+      })
       .catch((err) => {
         // The remembered dataset may have been deleted — fall back to the list.
         setError(err instanceof Error ? err.message : 'Failed to load dataset')
         setDatasetId(null)
       })
-  }, [datasetId])
+  }, [datasetId, syncLens])
 
   useEffect(() => {
     localStorage.setItem(LAST_TAB_KEY, tab)
@@ -116,6 +215,12 @@ function App() {
               Data
             </button>
             <span className="spacer" />
+            <button onClick={undo} disabled={undoLen === 0} title="Undo (⌘Z)">
+              ↶ Undo
+            </button>
+            <button onClick={redo} disabled={redoLen === 0} title="Redo (⌘⇧Z)">
+              ↷ Redo
+            </button>
             {tab === 'data' && meta.filters.length > 0 && (
               <label className="muted" style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
                 Filter:
@@ -137,12 +242,14 @@ function App() {
           </div>
 
           {tab === 'variables' && (
-            <VariableEditor meta={meta} onChanged={setMeta} />
+            <VariableEditor meta={meta} onChanged={recordAndSet} />
           )}
           {tab === 'filters' && (
-            <FiltersManager meta={meta} onChanged={setMeta} />
+            <FiltersManager meta={meta} onChanged={recordAndSet} />
           )}
-          {tab === 'crosstabs' && <CrosstabView meta={meta} onChanged={setMeta} />}
+          {tab === 'crosstabs' && (
+            <CrosstabView meta={meta} onChanged={recordAndSet} />
+          )}
           {tab === 'data' && (
             <DataPreview datasetId={meta.id} filterId={dataFilter || undefined} />
           )}

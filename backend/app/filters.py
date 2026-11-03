@@ -8,6 +8,7 @@ match what the user sees. Missing values never satisfy a condition.
 from __future__ import annotations
 
 from functools import reduce
+from typing import Literal
 
 import pandas as pd
 
@@ -74,27 +75,25 @@ def evaluate_condition(
     return pd.Series(False, index=df.index)
 
 
-def evaluate_filter(
+def evaluate_conditions(
     df: pd.DataFrame,
     index: dict[str, Variable],
-    filt: Filter,
+    conditions: list[Condition],
+    default: Literal["and", "or"] = "and",
 ) -> pd.Series:
-    """Return a boolean Series marking rows the filter selects.
+    """Combine conditions left to right via each one's ``connector``.
 
-    Conditions join left to right via each condition's `connector` ("and"/"or"),
-    with AND binding tighter than OR, so "X or Y and Z" means "X or (Y and Z)".
-    Older filters without connectors fall back to the whole-filter `match`.
+    AND binds tighter than OR, so "X or Y and Z" means "X or (Y and Z)". Empty
+    conditions select everyone. ``default`` is the connector for conditions with
+    none set (older saved data).
     """
-    if not filt.conditions:
+    if not conditions:
         return pd.Series(True, index=df.index)
 
-    default = "and" if filt.match == "all" else "or"
-    masks = [evaluate_condition(df, index, c) for c in filt.conditions]
-
-    # Group consecutive AND-joined masks, then OR the groups together.
+    masks = [evaluate_condition(df, index, c) for c in conditions]
     or_terms: list[pd.Series] = []
     current = masks[0]
-    for condition, mask in zip(filt.conditions[1:], masks[1:]):
+    for condition, mask in zip(conditions[1:], masks[1:]):
         connector = condition.connector or default
         if connector == "or":
             or_terms.append(current)
@@ -102,5 +101,14 @@ def evaluate_filter(
         else:
             current = current & mask
     or_terms.append(current)
-
     return reduce(lambda a, b: a | b, or_terms).fillna(False)
+
+
+def evaluate_filter(
+    df: pd.DataFrame,
+    index: dict[str, Variable],
+    filt: Filter,
+) -> pd.Series:
+    """Return a boolean Series marking rows the filter selects."""
+    default = "and" if filt.match == "all" else "or"
+    return evaluate_conditions(df, index, filt.conditions, default)

@@ -619,6 +619,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   const selectedNode = selectedId ? findNode(tree, selectedId) : null
   const builderSpec = currentSpec()
+  const builderSpecKey = JSON.stringify(builderSpec)
   const dirty =
     selectedNode?.spec != null &&
     (JSON.stringify(builderSpec) !== JSON.stringify(selectedNode.spec) ||
@@ -626,6 +627,40 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   const driverNode =
     selectedNode && selectedNode.kind === 'driver' ? selectedNode : null
+
+  function autoName(): string {
+    return colValue && colValue !== TOTAL
+      ? `${rowLabelFor(rowValue)} by ${colLabelFor(colValue)}`
+      : rowLabelFor(rowValue)
+  }
+
+  // Auto-save the builder: a valid new draft (Row chosen) creates a table node;
+  // edits to an open table save into it. Debounced so bursts collapse.
+  useEffect(() => {
+    if (driverNode || !builderSpec) return
+    const name = titleDraft.trim() || autoName()
+    const t = setTimeout(() => {
+      if (selectedId) {
+        const node = findNode(tree, selectedId)
+        if (!node) return
+        if (JSON.stringify(node.spec) !== builderSpecKey || node.name !== name)
+          persistTree(updateNode(tree, selectedId, { spec: builderSpec, name }))
+      } else {
+        const node: CrosstabNode = {
+          id: crypto.randomUUID(),
+          name,
+          kind: 'crosstab',
+          children: [],
+          spec: builderSpec,
+          version: 1,
+        }
+        setSelectedId(node.id)
+        persistTree(insertNode(tree, activeFolderId, node))
+      }
+    }, 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [builderSpecKey, titleDraft, selectedId])
 
   function selectCrosstab(node: CrosstabNode) {
     if (!node.spec) return
@@ -699,34 +734,6 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setHeaderEdit(null)
   }
 
-  // After saving, carry the analysis config (row, column, weight, filter, stats,
-  // significance) into a fresh unsaved table; only the saved-table link, title,
-  // and table-specific groups/renames/hides are cleared.
-  function carryOverToNewTable() {
-    setSelectedId(null)
-    setTitleDraft('')
-    setRowGroups([])
-    setColumnGroups([])
-    setBannerGroups([])
-    setRowRenames({})
-    setColRenames({})
-    setRowHidden(new Set())
-    setColHidden(new Set())
-    setRowOrderList([])
-    setColOrderList([])
-    setCatHidden(new Set())
-    setCatRenames({})
-    setParentHidden(new Set())
-    setParentRenames({})
-    setSelCats(new Set())
-    setSelRows(new Set())
-    setSelCols(new Set())
-    setSelCells(new Set())
-    setAnchorRow(null)
-    setAnchorCol(null)
-    setHeaderEdit(null)
-  }
-
   function newFolder() {
     const node: CrosstabNode = {
       id: crypto.randomUUID(),
@@ -740,41 +747,6 @@ export function CrosstabView({ meta, onChanged }: Props) {
     setActiveFolderId(node.id)
     setEditingId(node.id)
     setEditingName(node.name)
-  }
-
-  function newTable() {
-    const spec = currentSpec()
-    if (!spec) return
-    const auto =
-      colValue && colValue !== TOTAL
-        ? `${rowLabelFor(rowValue)} by ${colLabelFor(colValue)}`
-        : rowLabelFor(rowValue)
-    const name = titleDraft.trim() || auto
-    const node: CrosstabNode = {
-      id: crypto.randomUUID(),
-      name,
-      kind: 'crosstab',
-      children: [],
-      spec,
-      version: 1,
-    }
-    persistTree(insertNode(tree, activeFolderId, node))
-    // Move on to a fresh crosstab; the saved one now lives in the tree.
-    carryOverToNewTable()
-  }
-
-  function saveTable() {
-    if (!selectedId || !selectedNode) return
-    const spec = currentSpec()
-    if (!spec) return
-    persistTree(
-      updateNode(tree, selectedId, {
-        spec,
-        name: titleDraft.trim() || selectedNode.name,
-      }),
-    )
-    // Move on to a fresh crosstab after saving, like "Save as table".
-    carryOverToNewTable()
   }
 
   function startRename(node: CrosstabNode) {
@@ -2625,25 +2597,15 @@ export function CrosstabView({ meta, onChanged }: Props) {
           )}
           {selectedNode ? (
             <>
-              {dirty && <span className="muted">Unsaved changes</span>}
-              <button className="primary" disabled={!dirty} onClick={saveTable}>
-                Save table
-              </button>
+              <span className="muted ct-savestate">
+                {dirty ? 'Saving…' : 'All changes saved'}
+              </span>
               <button onClick={closeTable}>Close</button>
             </>
           ) : (
-            <button
-              className="primary"
-              disabled={!builderSpec}
-              onClick={newTable}
-              title={
-                builderSpec
-                  ? 'Save the current setup as a table'
-                  : 'Choose a row and column first'
-              }
-            >
-              Save as table
-            </button>
+            builderSpec && (
+              <span className="muted ct-savestate">Saving…</span>
+            )
           )}
           <button
             disabled={!builderSpec || exporting}

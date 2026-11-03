@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { WeightDialog } from './WeightDialog'
+import { CountDialog } from './CountDialog'
+import { RuleDialog } from './RuleDialog'
 import {
   NewVariableDialog,
   TextCodeDialog,
@@ -70,13 +72,14 @@ export function VariableEditor({ meta, onChanged }: Props) {
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [bandFor, setBandFor] = useState<Variable | null>(null)
   const [binaryFor, setBinaryFor] = useState<Variable | null>(null)
   const [pickAnyFor, setPickAnyFor] = useState<Variable | null>(null)
   const [combineOpen, setCombineOpen] = useState(false)
   const [newVarOpen, setNewVarOpen] = useState(false)
+  const [countOpen, setCountOpen] = useState(false)
+  const [rulesOpen, setRulesOpen] = useState(false)
   const [textCode, setTextCode] = useState<{ initial: TextCodeInitial | null } | null>(
     null,
   )
@@ -89,13 +92,43 @@ export function VariableEditor({ meta, onChanged }: Props) {
   const [weightDialog, setWeightDialog] = useState<{ initial: Variable | null } | null>(
     null,
   )
+  const variablesRef = useRef(variables)
+  const questionsRef = useRef(questions)
+  const selfMeta = useRef<DatasetMeta | null>(null)
+  const saveTimer = useRef<number | null>(null)
+  const firstRun = useRef(true)
+  const skipNextSave = useRef(false)
 
-  // Re-sync whenever the dataset metadata changes (save, create, delete).
+  // Re-sync when the dataset metadata changes externally (undo/redo, dialogs,
+  // dataset switch) — but ignore our own auto-save echo so typing isn't disrupted.
   useEffect(() => {
+    if (meta === selfMeta.current) return
+    skipNextSave.current = true
     setVariables(meta.variables)
     setQuestions(meta.questions ?? [])
     setDirty(false)
   }, [meta])
+
+  useEffect(() => {
+    variablesRef.current = variables
+  }, [variables])
+  useEffect(() => {
+    questionsRef.current = questions
+  }, [questions])
+
+  // Debounced auto-save on any user edit to variables/questions.
+  useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false
+      return
+    }
+    if (skipNextSave.current) {
+      skipNextSave.current = false
+      return
+    }
+    scheduleSave()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variables, questions])
 
   // One combined list: each question appears in place of its first column,
   // the rest of its columns are hidden (merged into the question entry).
@@ -329,20 +362,46 @@ export function VariableEditor({ meta, onChanged }: Props) {
     })
   }
 
-  async function save() {
-    setSaving(true)
-    setError(null)
+  async function doAutoSave() {
     try {
-      await updateVariables(meta.id, variables)
-      onChanged(await saveQuestions(meta.id, questions.filter((q) => q.items.length > 0)))
+      await updateVariables(meta.id, variablesRef.current)
+      const m = await saveQuestions(
+        meta.id,
+        questionsRef.current.filter((q) => q.items.length > 0),
+      )
+      selfMeta.current = m
+      onChanged(m)
+      setDirty(false)
+      setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed')
-    } finally {
-      setSaving(false)
+      setError(err instanceof Error ? err.message : 'Auto-save failed')
     }
   }
 
+  function scheduleSave() {
+    setDirty(true)
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null
+      void doAutoSave()
+    }, 600)
+  }
+
+  // Flush a pending save before an action/dialog that reads server-side state.
+  async function flushSave() {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
+      await doAutoSave()
+    }
+  }
+
+  function openWithFlush(open: () => void) {
+    void flushSave().then(open)
+  }
+
   async function run(action: () => Promise<DatasetMeta>) {
+    await flushSave()
     setError(null)
     try {
       onChanged(await action())
@@ -365,33 +424,19 @@ export function VariableEditor({ meta, onChanged }: Props) {
           {questionCount > 0 && `, ${questionCount} grouped variables`}
         </span>
         <span className="spacer" />
-        {dirty && <span className="muted">Unsaved changes</span>}
-        <button
-          onClick={() => setNewVarOpen(true)}
-          disabled={dirty}
-          title={dirty ? 'Save changes first' : undefined}
-        >
+        <span className="muted">{dirty ? 'Saving…' : 'All changes saved'}</span>
+        <button onClick={() => openWithFlush(() => setNewVarOpen(true))}>
           New variable…
         </button>
-        <button
-          onClick={() => setCombineOpen(true)}
-          disabled={dirty}
-          title={dirty ? 'Save changes first' : undefined}
-        >
+        <button onClick={() => openWithFlush(() => setCombineOpen(true))}>
           Combine variables…
         </button>
-        <button onClick={() => setWeightDialog({ initial: null })}>
+        <button
+          onClick={() => openWithFlush(() => setWeightDialog({ initial: null }))}
+        >
           New weight
         </button>
-        <button className="primary" disabled={!dirty || saving} onClick={save}>
-          {saving ? 'Saving…' : 'Save changes'}
-        </button>
       </div>
-      {dirty && (
-        <p className="muted" style={{ marginTop: 0 }}>
-          Save your edits before copying or recoding a variable.
-        </p>
-      )}
       {error && <p className="error">{error}</p>}
 
       <div className="table-scroll">
@@ -428,7 +473,9 @@ export function VariableEditor({ meta, onChanged }: Props) {
                     onRemoveItem={(column) => removeQuestionItem(q.id, column)}
                     onUngroup={() => ungroupQuestion(q.id)}
                     onEditCodes={
-                      questionIsCoded(q) ? () => editCodesForQuestion(q) : undefined
+                      questionIsCoded(q)
+                        ? () => openWithFlush(() => editCodesForQuestion(q))
+                        : undefined
                     }
                     onDelete={
                       questionIsDerived(q) ? () => deleteQuestion(q) : undefined
@@ -444,20 +491,22 @@ export function VariableEditor({ meta, onChanged }: Props) {
                   variable={v}
                   datasetId={meta.id}
                   isOpen={isOpen}
-                  dirty={dirty}
+                  dirty={false}
                   onToggle={() => setExpanded(isOpen ? null : v.name)}
                   onLabel={(label) => patchVariable(v.name, { label })}
                   onType={(type) => patchVariable(v.name, { type })}
                   onValuePatch={(i, patch) => patchValue(v.name, i, patch)}
                   onRecode={(recode) => patchRecode(v.name, recode)}
                   onCopy={() => run(() => copyVariable(meta.id, v.name))}
-                  onBand={() => setBandFor(v)}
-                  onBinary={() => setBinaryFor(v)}
-                  onPickAny={() => setPickAnyFor(v)}
-                  onEditWeight={() => setWeightDialog({ initial: v })}
+                  onBand={() => openWithFlush(() => setBandFor(v))}
+                  onBinary={() => openWithFlush(() => setBinaryFor(v))}
+                  onPickAny={() => openWithFlush(() => setPickAnyFor(v))}
+                  onEditWeight={() =>
+                    openWithFlush(() => setWeightDialog({ initial: v }))
+                  }
                   onEditCodes={
                     v.recode?.kind === 'code_one'
-                      ? () => editCodesForVariable(v)
+                      ? () => openWithFlush(() => editCodesForVariable(v))
                       : undefined
                   }
                   onDelete={() =>
@@ -528,6 +577,36 @@ export function VariableEditor({ meta, onChanged }: Props) {
           onChooseText={() => {
             setNewVarOpen(false)
             setTextCode({ initial: null })
+          }}
+          onChooseCount={() => {
+            setNewVarOpen(false)
+            setCountOpen(true)
+          }}
+          onChooseLogic={() => {
+            setNewVarOpen(false)
+            setRulesOpen(true)
+          }}
+        />
+      )}
+      {rulesOpen && (
+        <RuleDialog
+          meta={meta}
+          onClose={() => setRulesOpen(false)}
+          onCreated={(m) => {
+            setRulesOpen(false)
+            onChanged(m)
+          }}
+        />
+      )}
+      {countOpen && (
+        <CountDialog
+          datasetId={meta.id}
+          variables={variables}
+          questions={questions}
+          onClose={() => setCountOpen(false)}
+          onCreated={(m) => {
+            setCountOpen(false)
+            onChanged(m)
           }}
         />
       )}
@@ -800,9 +879,9 @@ function VariableRow({
   onDelete,
   onToggleHidden,
 }: RowProps) {
-  // Combined (coalesce) variables have no source_name but are still derived.
+  // Combined (coalesce) and count variables have no source_name but are derived.
   const derived =
-    variable.source_name !== null || variable.recode?.kind === 'coalesce'
+    variable.source_name !== null || variable.recode != null
   const isNumeric = variable.type === 'numeric'
   const isCategorical = variable.type === 'categorical'
   const isText = variable.type === 'text'

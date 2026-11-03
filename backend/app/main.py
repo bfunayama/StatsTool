@@ -37,6 +37,8 @@ from .models import (
     CombinationsRequest,
     CombinationsResponse,
     CopyRequest,
+    CountRecode,
+    CountRequest,
     CrosstabNode,
     CrosstabRequest,
     CrosstabResponse,
@@ -62,6 +64,8 @@ from .models import (
     QuestionKind,
     QuestionsUpdate,
     RefreshReport,
+    RulesRecode,
+    RulesRequest,
     TextCodeRequest,
     ValueAttribute,
     Variable,
@@ -580,6 +584,84 @@ def text_code(dataset_id: str, payload: TextCodeRequest) -> DatasetMeta:
     storage.save_meta(meta)
     return meta
 
+
+@app.post("/api/datasets/{dataset_id}/variables/count", response_model=DatasetMeta)
+def count_variable(dataset_id: str, payload: CountRequest) -> DatasetMeta:
+    """Create a numeric 'count across columns' variable."""
+    meta, df = _load(dataset_id)
+    if not payload.sources:
+        raise HTTPException(status_code=400, detail="Pick at least one column.")
+    names = {v.name for v in meta.variables}
+    for s in payload.sources:
+        if s not in names:
+            raise HTTPException(status_code=400, detail=f"Unknown column: {s}")
+    if payload.mode == "equals" and not payload.values:
+        raise HTTPException(status_code=400, detail="Choose a value to count.")
+    label = payload.new_label.strip() or "Count"
+    var = Variable(
+        name=compute.unique_name(label, names),
+        label=label,
+        type=VariableType.numeric,
+        recode=CountRecode(
+            sources=list(payload.sources), mode=payload.mode, values=list(payload.values)
+        ),
+    )
+    meta.variables.append(var)
+    try:
+        compute.compute_display_series(df, compute.build_index(meta.variables), var)
+    except Exception as err:
+        raise HTTPException(
+            status_code=400, detail=f"Count could not be computed: {err}"
+        ) from err
+    storage.save_meta(meta)
+    return meta
+
+
+@app.post("/api/datasets/{dataset_id}/variables/rules", response_model=DatasetMeta)
+def rules_variable(dataset_id: str, payload: RulesRequest) -> DatasetMeta:
+    """Create a categorical variable from ordered IF/AND/OR rules (first match wins)."""
+    meta, df = _load(dataset_id)
+    rules = [r for r in payload.rules if r.label.strip()]
+    if not rules:
+        raise HTTPException(status_code=400, detail="Add at least one rule.")
+    names = {v.name for v in meta.variables}
+    for rule in rules:
+        rule.label = rule.label.strip()
+        for cond in rule.conditions:
+            if cond.variable not in names:
+                raise HTTPException(
+                    status_code=400, detail=f"Unknown variable: {cond.variable}"
+                )
+    else_label = (payload.else_label or "").strip() or None
+    # Value attributes in rule order (plus the else label), so rows sort sensibly.
+    labels: list[str] = []
+    for rule in rules:
+        if rule.label not in labels:
+            labels.append(rule.label)
+    if else_label and else_label not in labels:
+        labels.append(else_label)
+    values = [
+        ValueAttribute(source_value=lbl, value=float(i + 1), label=lbl)
+        for i, lbl in enumerate(labels)
+    ]
+    label = payload.new_label.strip() or "Rule variable"
+    var = Variable(
+        name=compute.unique_name(label, names),
+        label=label,
+        type=VariableType.categorical,
+        values=values,
+        recode=RulesRecode(rules=rules, else_label=else_label),
+    )
+    meta.variables.append(var)
+    try:
+        compute.compute_display_series(df, compute.build_index(meta.variables), var)
+    except Exception as err:
+        raise HTTPException(
+            status_code=400, detail=f"Rule variable could not be computed: {err}"
+        ) from err
+    storage.save_meta(meta)
+    return meta
+
     """A sensible merged label: the shared stem after the first ' - ', else '(combined)'."""
     if labels and all(" - " in lbl for lbl in labels):
         stems = {lbl.split(" - ", 1)[1].strip() for lbl in labels}
@@ -986,6 +1068,16 @@ def update_crosstabs(dataset_id: str, payload: CrosstabsUpdate) -> DatasetMeta:
     return meta
 
 
+@app.put("/api/datasets/{dataset_id}/meta", response_model=DatasetMeta)
+def replace_meta(dataset_id: str, payload: DatasetMeta) -> DatasetMeta:
+    """Replace the whole analysis state at once (used by undo/redo)."""
+    _load(dataset_id)  # 404s if the dataset doesn't exist
+    if payload.id != dataset_id:
+        raise HTTPException(status_code=400, detail="Dataset id mismatch.")
+    storage.save_meta(payload)
+    return payload
+
+
 @app.post("/api/datasets/{dataset_id}/export/xlsx")
 def export_xlsx(dataset_id: str, payload: ExportRequest) -> Response:
     """Export crosstabs to a single .xlsx workbook (grouped into worksheets)."""
@@ -1066,14 +1158,14 @@ def _validate_variables(variables: list[Variable], df: pd.DataFrame) -> None:
         raise HTTPException(status_code=400, detail="Duplicate variable names.")
 
     raw_columns = {str(c) for c in df.columns}
-    # Weight and coalesce variables are computed (no single source column),
-    # so they aren't raw imports.
+    # A raw import has no recode at all (weights and all derived/computed recodes
+    # — coalesce, count, rules, … — are not raw columns).
     raw_names = {
         v.name
         for v in variables
         if v.source_name is None
+        and v.recode is None
         and v.type is not VariableType.weight
-        and not isinstance(v.recode, CoalesceRecode)
     }
     if raw_names != raw_columns:
         raise HTTPException(

@@ -57,6 +57,24 @@ export interface CodeAnyRecode {
   values: string[]
 }
 
+export interface CountRecode {
+  kind: 'count'
+  sources: string[]
+  mode: 'selected' | 'equals' | 'mode_freq'
+  values: string[]
+}
+
+export interface Rule {
+  conditions: Condition[]
+  label: string
+}
+
+export interface RulesRecode {
+  kind: 'rules'
+  rules: Rule[]
+  else_label: string | null
+}
+
 export type Recode =
   | BandRecode
   | BinaryRecode
@@ -64,6 +82,8 @@ export type Recode =
   | CoalesceRecode
   | CodeOneRecode
   | CodeAnyRecode
+  | CountRecode
+  | RulesRecode
 
 export interface WeightCell {
   values: string[]
@@ -640,6 +660,18 @@ export function saveCrosstabs(
   }).then(handle<DatasetMeta>)
 }
 
+// Replace the whole analysis state at once (used by undo/redo).
+export function replaceMeta(
+  id: string,
+  meta: DatasetMeta,
+): Promise<DatasetMeta> {
+  return fetch(`/api/datasets/${id}/meta`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(meta),
+  }).then(handle<DatasetMeta>)
+}
+
 // Export tables to a single .xlsx workbook and trigger a download. Each sheet
 // holds one or more tables (stacked); the caller decides the grouping.
 export interface ExportTable {
@@ -792,6 +824,25 @@ export function createTextCode(
     ...payload,
     replace: payload.replace ?? null,
   })
+}
+
+export function createCountVariable(
+  id: string,
+  payload: {
+    sources: string[]
+    mode: 'selected' | 'equals' | 'mode_freq'
+    values: string[]
+    new_label: string
+  },
+): Promise<DatasetMeta> {
+  return postJson(`/api/datasets/${id}/variables/count`, payload)
+}
+
+export function createRulesVariable(
+  id: string,
+  payload: { rules: Rule[]; else_label: string | null; new_label: string },
+): Promise<DatasetMeta> {
+  return postJson(`/api/datasets/${id}/variables/rules`, payload)
 }
 
 export interface CoalesceSourceInfo {

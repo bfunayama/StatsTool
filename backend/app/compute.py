@@ -19,9 +19,11 @@ from .models import (
     CodeAnyRecode,
     CodeOneRecode,
     CompactSelectRecode,
+    CountRecode,
     Question,
     QuestionItem,
     QuestionKind,
+    RulesRecode,
     Variable,
     ValueAttribute,
     VariableType,
@@ -70,6 +72,14 @@ def label_order(var: Variable) -> list[str] | None:
         return var.recode.categories or None
     if isinstance(var.recode, CodeAnyRecode):
         return [var.recode.category]
+    if isinstance(var.recode, RulesRecode):
+        labels: list[str] = []
+        for r in var.recode.rules:
+            if r.label not in labels:
+                labels.append(r.label)
+        if var.recode.else_label and var.recode.else_label not in labels:
+            labels.append(var.recode.else_label)
+        return labels or None
     if isinstance(var.recode, CoalesceRecode):
         labels = [v.label for v in var.values if not v.missing]
         return labels or None
@@ -139,6 +149,12 @@ def compute_display_series(
 
     if isinstance(var.recode, CoalesceRecode):
         return _apply_coalesce(df, index, var.recode, visited)
+
+    if isinstance(var.recode, CountRecode):
+        return _apply_count(df, index, var.recode, visited)
+
+    if isinstance(var.recode, RulesRecode):
+        return _apply_rules(df, index, var.recode)
 
     if var.source_name is None:
         raw = _clean(df[var.name])
@@ -266,6 +282,53 @@ def _apply_coalesce(
     result = series[0].copy()
     for s in series[1:]:
         result = result.where(result.notna(), s)
+    return result.astype("object")
+
+
+def _apply_count(
+    df: pd.DataFrame,
+    index: dict[str, Variable],
+    recode: CountRecode,
+    visited: set[str],
+) -> pd.Series:
+    """Count, per respondent, how many source columns meet the condition."""
+    series = _coalesce_series(df, index, recode.sources, visited)
+    if not series:
+        return pd.Series("0", index=df.index, dtype="string")
+    frame = pd.concat(series, axis=1)
+    frame.columns = range(len(series))
+    if recode.mode == "equals":
+        counts = frame.isin(recode.values).sum(axis=1)
+    elif recode.mode == "mode_freq":
+        def _row_mode(row: pd.Series) -> int:
+            vals = row.dropna()
+            return int(vals.value_counts().iloc[0]) if not vals.empty else 0
+
+        counts = frame.apply(_row_mode, axis=1)
+    else:  # selected / has any answer
+        counts = frame.notna().sum(axis=1)
+    # Return whole-number strings (like other numeric display series) so crosstab
+    # row/column labels compare equal to the values.
+    return counts.astype(int).astype("string")
+
+
+def _apply_rules(
+    df: pd.DataFrame,
+    index: dict[str, Variable],
+    recode: RulesRecode,
+) -> pd.Series:
+    """Assign each respondent the label of the first matching rule (else label/NA)."""
+    from . import filters as filtering  # local import avoids a circular import
+
+    result = pd.Series(pd.NA, index=df.index, dtype="object")
+    assigned = pd.Series(False, index=df.index)
+    for rule in recode.rules:
+        mask = filtering.evaluate_conditions(df, index, rule.conditions)
+        take = mask & ~assigned
+        result = result.mask(take, rule.label)
+        assigned = assigned | take
+    if recode.else_label is not None:
+        result = result.mask(~assigned, recode.else_label)
     return result.astype("object")
 
 

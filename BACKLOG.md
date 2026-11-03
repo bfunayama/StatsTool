@@ -9,6 +9,35 @@ These are roadmap capabilities from the README that are **not yet built**:
 
 ---
 
+## Kano classification helper
+
+**Status:** Backlog
+**Added:** 2026-11-03
+
+### Summary
+A one-click tool to turn the two standard Kano questions (Functional + Dysfunctional,
+each a 5-point grid over the same features) into per-feature Kano **category** variables
+(A / O / M / I / R / Q), instead of hand-building 7 IF/AND/OR rules per feature.
+
+### Behaviour
+- Analyst picks the **Functional** question and the **Dysfunctional** question (grids
+  whose rows are the same features), and maps the 5 scale points
+  (Like / Expect / Neutral / Live-with / Dislike) to the two axes.
+- For each feature, generate a categorical variable via the standard 5×5 Kano evaluation
+  table → A/O/M/I/R/Q (first-match rule logic, already supported by the `rules` recode —
+  this can reuse it under the hood).
+- Optionally also auto-build the **comparison grid** (features × category) so the analyst
+  gets the "% per category per feature" table immediately.
+- Category display order A → O → M → I → R → Q.
+
+### Notes
+- Pure convenience over the existing **Rule-based** + **Compare side by side** flow (which
+  already does this manually). The win is avoiding 7 rules × N features by hand.
+- Count-across-columns is *not* involved in the classification; it could optionally add
+  per-respondent summaries later (e.g. "number of features rated Attractive").
+
+---
+
 ## Small bugs & tweaks
 
 **Status:** ✅ Shipped (2026-11-03)
@@ -28,8 +57,16 @@ These are roadmap capabilities from the README that are **not yet built**:
 
 ## Count-across-columns variable creation
 
-**Status:** Backlog
+**Status:** ✅ Shipped (2026-11-03)
 **Added:** 2026-11-03
+
+Shipped: **New variable → Count across columns**. Pick a set of columns (or a Pick-Any/grid
+question, which expands to its members) and count, per respondent, how many meet a
+condition: **selected / has any answer**, **equals a value** (top-box counts), or
+**most-common-answer frequency** (a straightlining data-quality metric, with in-dialog
+helper text). No-answer = 0. Produces a numeric variable usable in filters, crosstabs,
+drivers, charts and export (band it afterward with the Band tool). Backend: `count` recode
+(`selected`/`equals`/`mode_freq`) + `POST /variables/count`.
 
 ### Summary
 A new variable-creation type that counts, per respondent, how many of a chosen set of
@@ -51,8 +88,15 @@ columns meet a condition — producing a numeric (or banded categorical) variabl
 
 ## Rule-based Variable creation (IF / AND / OR logic)
 
-**Status:** Backlog
+**Status:** ✅ Shipped (2026-11-03)
 **Requested:** 2026-10-13
+
+Shipped: **New variable → From logic (IF / AND / OR)**. Ordered rules, each an output
+category with conditions combined by **AND / OR** (reuses the filter condition builder and
+engine). First match wins; unmatched respondents go to an optional **else** category or
+missing. Produces a categorical variable usable everywhere. Backend: `rules` recode +
+`POST /variables/rules`; `filters.evaluate_conditions` extracted for reuse. (Pick-Any
+variant and in-place editing remain possible future enhancements.)
 
 ### Summary
 A tool to create a new variable by defining logical rules over existing variables, e.g.
@@ -137,8 +181,16 @@ measurement levels so metadata is pre-populated.
 
 ## Auto-save (remove manual Save buttons)
 
-**Status:** Backlog
+**Status:** ✅ Shipped (2026-11-03)
 **Requested:** 2026-10-13
+
+Shipped: manual Save buttons removed from both **Crosstabs** (no more "Save as table" — a
+new table auto-saves once you pick a Row; edits auto-save into the open table, debounced)
+and the **Variables tab** (debounced auto-save; the "save first" gates are gone; a
+"Saving…/All changes saved" indicator replaces the button; cursor-safe via a self-echo
+guard). Plus **global Undo/Redo**: session-only history over whole-analysis snapshots,
+toolbar buttons + **⌘Z / ⌘⇧Z** (native undo still wins inside text fields), covers
+deletions. Backend: atomic `PUT /datasets/{id}/meta` for undo/redo restore.
 
 ### Summary
 Auto-save the analysis on every change so manual save actions can be removed. Applies to

@@ -31,9 +31,13 @@ const UNCODED = '__uncoded__'
 export function NewVariableDialog({
   onClose,
   onChooseText,
+  onChooseCount,
+  onChooseLogic,
 }: {
   onClose: () => void
   onChooseText: () => void
+  onChooseCount: () => void
+  onChooseLogic: () => void
 }) {
   const backdrop = useBackdropDismiss()
   return (
@@ -46,17 +50,23 @@ export function NewVariableDialog({
           </button>
         </div>
         <div className="newvar-options">
-          <button className="newvar-card" disabled>
+          <button className="newvar-card" onClick={onChooseLogic}>
             <strong>From logic (IF / AND / OR)</strong>
             <span className="muted">
               Build a variable from conditions over existing variables.
             </span>
-            <span className="badge">Coming soon</span>
           </button>
           <button className="newvar-card" onClick={onChooseText}>
             <strong>Code open-ended text</strong>
             <span className="muted">
               Categorise verbatim responses into a Pick One or Pick Any variable.
+            </span>
+          </button>
+          <button className="newvar-card" onClick={onChooseCount}>
+            <strong>Count across columns</strong>
+            <span className="muted">
+              Count, per respondent, how many of several columns meet a condition
+              (e.g. brands selected, top-box count).
             </span>
           </button>
         </div>

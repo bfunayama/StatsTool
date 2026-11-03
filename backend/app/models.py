@@ -110,6 +110,45 @@ class CodeAnyRecode(BaseModel):
     values: list[str] = Field(default_factory=list)  # verbatims assigned here
 
 
+class CountRecode(BaseModel):
+    """Count, per respondent, how many of ``sources`` meet a condition.
+
+    ``selected`` counts non-missing columns (e.g. brands selected); ``equals``
+    counts columns whose value is in ``values`` (e.g. top-box count); ``mode_freq``
+    returns the frequency of each respondent's most-common answer across the
+    columns (a straightlining data-quality metric). Respondents with no answers
+    get 0. The result is numeric.
+    """
+
+    kind: Literal["count"] = "count"
+    sources: list[str] = Field(default_factory=list)
+    mode: Literal["selected", "equals", "mode_freq"] = "selected"
+    values: list[str] = Field(default_factory=list)  # for ``equals``
+
+
+class Rule(BaseModel):
+    """One IF rule of a rule-based variable: conditions (AND/OR) → output label.
+
+    ``conditions`` reuse the filter ``Condition`` model, combined left-to-right by
+    each one's ``connector`` (AND binds tighter than OR). An empty list matches
+    everyone (a catch-all rule).
+    """
+
+    conditions: list["Condition"] = Field(default_factory=list)
+    label: str
+
+
+class RulesRecode(BaseModel):
+    """Build a categorical variable from ordered IF/AND/OR rules (first match wins).
+
+    Unmatched respondents get ``else_label`` when set, otherwise missing.
+    """
+
+    kind: Literal["rules"] = "rules"
+    rules: list[Rule] = Field(default_factory=list)
+    else_label: str | None = None
+
+
 Recode = Annotated[
     Union[
         BandRecode,
@@ -118,6 +157,8 @@ Recode = Annotated[
         CoalesceRecode,
         CodeOneRecode,
         CodeAnyRecode,
+        CountRecode,
+        RulesRecode,
     ],
     Field(discriminator="kind"),
 ]
@@ -429,6 +470,23 @@ class TextCodeRequest(BaseModel):
     new_label: str
     categories: list[TextCodeCategory] = Field(default_factory=list)
     replace: str | None = None
+
+
+class CountRequest(BaseModel):
+    """Create a numeric 'count across columns' variable from a set of columns."""
+
+    sources: list[str]
+    mode: Literal["selected", "equals", "mode_freq"] = "selected"
+    values: list[str] = Field(default_factory=list)
+    new_label: str
+
+
+class RulesRequest(BaseModel):
+    """Create a categorical variable from ordered IF/AND/OR rules."""
+
+    rules: list[Rule] = Field(default_factory=list)
+    else_label: str | None = None
+    new_label: str
 
 
 class PickAnyCompactPreview(BaseModel):
@@ -818,3 +876,5 @@ class ExportRequest(BaseModel):
 # DatasetMeta references Filter before it is defined; resolve the forward ref.
 CrosstabNode.model_rebuild()
 DatasetMeta.model_rebuild()
+# Rule references Condition, which is defined later in this module.
+Rule.model_rebuild()
