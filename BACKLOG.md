@@ -75,6 +75,9 @@ each a 5-point grid over the same features) into per-feature Kano **category** v
   name to reflect its selected Row and Column while it has never been manually renamed.
   Once manually renamed, preserve that name across subsequent crosstab changes until
   the user manually renames it again.
+- [ ] **Define labels when converting numeric to categorical** - in the Variables tab,
+  allow users to define category labels for the existing numeric values when switching
+  a variable's Type from numeric to categorical.
 
 ---
 
