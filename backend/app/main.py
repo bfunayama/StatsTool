@@ -662,6 +662,8 @@ def rules_variable(dataset_id: str, payload: RulesRequest) -> DatasetMeta:
     storage.save_meta(meta)
     return meta
 
+
+def _default_coalesce_label(labels: list[str]) -> str:
     """A sensible merged label: the shared stem after the first ' - ', else '(combined)'."""
     if labels and all(" - " in lbl for lbl in labels):
         stems = {lbl.split(" - ", 1)[1].strip() for lbl in labels}
