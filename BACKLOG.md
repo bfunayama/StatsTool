@@ -55,6 +55,29 @@ each a 5-point grid over the same features) into per-feature Kano **category** v
 
 ---
 
+## Crosstabs / UI follow-ups
+
+**Status:** Backlog
+**Added:** 2026-11-18
+
+- [ ] **Dynamic window sizing + viewport-safe Row/Column dropdowns** — make crosstab builder
+  layout respond cleanly to window size changes, and prevent Row/Column dropdown menus from
+  extending past the viewport.
+- [ ] **Merge merged groups** — allow merging multiple existing merged groups in crosstabs.
+- [ ] **Right-click rename in crosstabs** — add a **Rename** action to the crosstab
+  right-click context menu.
+- [ ] **Table panel multi-selection and bulk deletion** - support Shift-click for range
+  selection and Command-click for toggling individual tables; remove the selection
+  checkboxes and add a **Delete selected** button.
+- [ ] **+ Table duplicates the current table** - create a saved duplicate with fields
+  preselected from the current crosstab, rather than a blank, unsaved draft.
+- [ ] **Dynamic table names until manually renamed** - automatically update a table's
+  name to reflect its selected Row and Column while it has never been manually renamed.
+  Once manually renamed, preserve that name across subsequent crosstab changes until
+  the user manually renames it again.
+
+---
+
 ## Count-across-columns variable creation
 
 **Status:** ✅ Shipped (2026-11-03)
