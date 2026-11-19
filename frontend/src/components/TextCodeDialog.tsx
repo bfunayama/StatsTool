@@ -88,7 +88,6 @@ export function TextCodeDialog({
   onClose: () => void
   onCreated: (meta: DatasetMeta) => void
 }) {
-  const backdrop = useBackdropDismiss()
   const editing = !!initial
   const [sourceVariable, setSourceVariable] = useState(
     initial?.sourceVariable ?? textVariables[0]?.name ?? '',
@@ -337,7 +336,7 @@ export function TextCodeDialog({
   }
 
   return (
-    <div className="modal-backdrop" {...backdrop(onClose)}>
+    <div className="modal-backdrop">
       <div
         className="modal textcode-modal"
         onClick={(e) => e.stopPropagation()}
