@@ -768,7 +768,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
     const node = confirmDelete
     if (!node) return
     persistTree(removeNode(tree, node.id))
-    if (selectedId && findNode([node], selectedId)) setSelectedId(null)
+    if (selectedId && findNode([node], selectedId)) newCrosstab()
+    if (activeFolderId && findNode([node], activeFolderId)) setActiveFolderId(null)
     setConfirmDelete(null)
   }
 

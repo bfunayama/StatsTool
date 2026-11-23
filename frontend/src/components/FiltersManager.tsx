@@ -321,7 +321,9 @@ export function ConditionRow({
     'idle',
   )
   const [reloadKey, setReloadKey] = useState(0)
+  const valueAnchor = useRef<string | null>(null)
   useEffect(() => {
+    valueAnchor.current = null
     if (!needsValues || !condition.variable) {
       setDistinct(null)
       setValuesState('idle')
@@ -358,11 +360,25 @@ export function ConditionRow({
     })
   }
 
-  function toggleValue(value: string) {
-    const set = new Set(condition.values)
-    if (set.has(value)) set.delete(value)
-    else set.add(value)
-    onChange({ values: Array.from(set) })
+  function toggleValue(value: string, checked: boolean, range: boolean) {
+    const anchorIndex = range && distinct
+      ? distinct.findIndex((entry) => entry.value === valueAnchor.current)
+      : -1
+    const selected = new Set(condition.values)
+    if (distinct && anchorIndex !== -1) {
+      const endIndex = distinct.findIndex((entry) => entry.value === value)
+      const start = Math.min(anchorIndex, endIndex)
+      const end = Math.max(anchorIndex, endIndex)
+      for (const entry of distinct.slice(start, end + 1)) {
+        if (checked) selected.add(entry.value)
+        else selected.delete(entry.value)
+      }
+    } else {
+      if (checked) selected.add(value)
+      else selected.delete(value)
+      valueAnchor.current = value
+    }
+    onChange({ values: Array.from(selected) })
   }
 
   return (
@@ -441,11 +457,25 @@ export function ConditionRow({
             <p className="muted">No values to choose from.</p>
           ) : (
             (distinct ?? []).map((d) => (
-              <label key={d.value} className="checkbox-item">
+              <label
+                key={d.value}
+                className="checkbox-item"
+                title="Shift-click to select or clear a range"
+                onClick={(event) => {
+                  if (!event.shiftKey || event.target === event.currentTarget.control) return
+                  event.preventDefault()
+                  event.currentTarget.control?.focus()
+                  toggleValue(d.value, !condition.values.includes(d.value), true)
+                }}
+              >
                 <input
                   type="checkbox"
                   checked={condition.values.includes(d.value)}
-                  onChange={() => toggleValue(d.value)}
+                  onChange={(event) => toggleValue(
+                    d.value,
+                    event.currentTarget.checked,
+                    event.nativeEvent instanceof MouseEvent && event.nativeEvent.shiftKey,
+                  )}
                 />
                 {d.value} <span className="muted">({d.count})</span>
               </label>

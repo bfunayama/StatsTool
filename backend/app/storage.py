@@ -29,6 +29,7 @@ from .models import (
     DatasetSummary,
     RefreshProjectImpact,
     RefreshReport,
+    VariableType,
 )
 from .template import apply_template
 
@@ -363,17 +364,23 @@ def refresh_data(
     source_format: str,
     commit: bool,
 ) -> RefreshReport:
-    """Replace a data set's rows (dry-run or commit) and re-fit its analyses.
-
-    The new file's columns are matched to each analysis by name: edits on
-    surviving columns are kept, missing columns prune whatever depends on them,
-    and new columns appear as fresh raw variables. ``commit=False`` reports the
-    impact without writing anything.
-    """
+    """Replace rows without discarding existing analysis definitions."""
     old = load_data_record(data_id)
-    old_cols = [v.name for v in old.variables]
-    new_cols = [v.name for v in base_variables]
+    old_cols = [
+        v.name for v in old.variables
+        if v.source_name is None and v.recode is None and v.type != VariableType.weight
+    ]
+    new_cols = list(df.columns)
     old_set, new_set = set(old_cols), set(new_cols)
+    removed = [col for col in old_cols if col not in new_set]
+    if removed:
+        raise ValueError(
+            "Update blocked to protect your analyses. The new file is missing "
+            f"these source columns: {', '.join(removed)}. Check the file type and "
+            "restore the original column names, or import it as a new data set."
+        )
+    added = [col for col in new_cols if col not in old_set]
+    added_set = set(added)
 
     new_record = DataSet(
         id=data_id,
@@ -390,19 +397,26 @@ def refresh_data(
     for meta in _all_projects():
         if meta.data_id != data_id:
             continue
-        new_meta = apply_template(meta, new_record)
-        new_meta.id = meta.id
-        new_meta.name = meta.name
+        existing_names = {v.name for v in meta.variables}
+        collisions = added_set & existing_names
+        if collisions:
+            raise ValueError(
+                f"Update blocked: new source columns conflict with existing variables "
+                f"in {meta.name or meta.source_filename}: {', '.join(sorted(collisions))}. "
+                "Rename the new columns or import the file as a new data set."
+            )
+        new_meta = meta.model_copy(deep=True)
+        new_meta.source_filename = new_record.source_filename
+        new_meta.n_rows = new_record.n_rows
+        new_meta.n_cols = new_record.n_cols
+        for base in base_variables:
+            if base.name in added_set:
+                new_meta.variables.append(base.model_copy(update={"question_id": None}, deep=True))
         refitted.append(new_meta)
         impacts.append(
             RefreshProjectImpact(
                 id=meta.id,
                 name=meta.name or meta.source_filename,
-                dropped_questions=max(0, len(meta.questions) - len(new_meta.questions)),
-                dropped_filters=max(0, len(meta.filters) - len(new_meta.filters)),
-                dropped_crosstabs=max(
-                    0, _count_crosstabs(meta.crosstabs) - _count_crosstabs(new_meta.crosstabs)
-                ),
             )
         )
 
@@ -411,8 +425,8 @@ def refresh_data(
         new_rows=int(df.shape[0]),
         old_cols=old.n_cols,
         new_cols=int(df.shape[1]),
-        added=[c for c in new_cols if c not in old_set],
-        removed=[c for c in old_cols if c not in new_set],
+        added=added,
+        removed=removed,
         source_filename=source_filename,
         committed=False,
         projects=impacts,
@@ -424,10 +438,15 @@ def refresh_data(
     data_path = _data_path(data_id)
     if data_path.exists():
         shutil.copy2(data_path, data_path.with_suffix(".parquet.bak"))
+    dataset_path = _dataset_path(data_id)
+    shutil.copy2(dataset_path, dataset_path.with_suffix(".json.bak"))
+    for meta in refitted:
+        project_path = _project_path(meta.id)
+        shutil.copy2(project_path, project_path.with_suffix(".json.bak"))
     tmp = data_path.with_suffix(".parquet.tmp")
     df.to_parquet(tmp, index=False)
     tmp.replace(data_path)
-    _atomic_write_text(_dataset_path(data_id), new_record.model_dump_json(indent=2))
+    _atomic_write_text(dataset_path, new_record.model_dump_json(indent=2))
     for new_meta in refitted:
         save_meta(new_meta)
     report.committed = True

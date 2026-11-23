@@ -66,9 +66,14 @@ each a 5-point grid over the same features) into per-feature Kano **category** v
 - [ ] **Merge merged groups** — allow merging multiple existing merged groups in crosstabs.
 - [ ] **Right-click rename in crosstabs** — add a **Rename** action to the crosstab
   right-click context menu.
+- [ ] **Remove and rebase crosstab columns** - add a right-click **Remove** option that
+  removes a column from the crosstab and automatically recalculates the table's base,
+  unlike **Hide**, which only conceals it. Added: 2026-11-23.
 - [ ] **Table panel multi-selection and bulk deletion** - support Shift-click for range
   selection and Command-click for toggling individual tables; remove the selection
   checkboxes and add a **Delete selected** button.
+- [ ] **Bulk actions for tables** - select a folder and apply changes such as a Column
+  selection, Filter, or Weight to all its child tables. Added: 2026-11-23.
 - [ ] **+ Table duplicates the current table** - create a saved duplicate with fields
   preselected from the current crosstab, rather than a blank, unsaved draft.
 - [ ] **Dynamic table names until manually renamed** - automatically update a table's

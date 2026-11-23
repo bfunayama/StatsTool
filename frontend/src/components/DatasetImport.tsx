@@ -590,7 +590,9 @@ export function DatasetImport({ onOpen }: Props) {
             <p className="muted">
               Replace the data behind “{refreshTarget.sourceFilename}” with{' '}
               <strong>{refreshFile.name}</strong>. Every analysis on this data set
-              updates; a one-level backup of the current data is kept.
+              keeps its existing variables, filters, and tables. Updates that
+              remove source columns are blocked. A backup of the current data
+              and analyses is kept.
             </p>
             <fieldset className="import-format">
               <legend>File type</legend>
@@ -684,7 +686,7 @@ export function DatasetImport({ onOpen }: Props) {
                       0,
                   ) && (
                     <p className="muted">
-                      No columns removed — all analyses carry over unchanged.
+                      Existing analysis definitions will be preserved.
                     </p>
                   )}
                 <p className="muted">
