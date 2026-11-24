@@ -86,6 +86,21 @@ each a 5-point grid over the same features) into per-feature Kano **category** v
 
 ---
 
+## Segmentation follow-ups
+
+**Status:** Backlog
+**Added:** 2026-11-25
+
+- [ ] **k-means clustering** - add k-means as a second segmentation method
+  alongside latent class analysis. Reuse the Segmentation panel and output
+  (class sizes, profiles, Index, Excel export). Needs a numeric or
+  ordinal-coded input and a clear rule for handling categorical indicators.
+- [ ] **Hierarchical clustering** - add agglomerative hierarchical clustering
+  as a third method, with a dendrogram or cut-height control to choose the
+  number of clusters. Reuse the same output and save-as-variable flow.
+
+---
+
 ## Count-across-columns variable creation
 
 **Status:** ✅ Shipped (2026-11-03)

@@ -149,6 +149,19 @@ class RulesRecode(BaseModel):
     else_label: str | None = None
 
 
+class SegmentRecode(BaseModel):
+    """Class membership saved from a latent class segmentation.
+
+    ``assignments`` holds each respondent's class number (1 = largest class) in
+    dataset row order, or None where the respondent was not classified (missing
+    answers, zero weight). ``k`` is the number of classes in that solution.
+    """
+
+    kind: Literal["segment"] = "segment"
+    k: int = 0
+    assignments: list[int | None] = Field(default_factory=list)
+
+
 Recode = Annotated[
     Union[
         BandRecode,
@@ -159,6 +172,7 @@ Recode = Annotated[
         CodeAnyRecode,
         CountRecode,
         RulesRecode,
+        SegmentRecode,
     ],
     Field(discriminator="kind"),
 ]
@@ -830,19 +844,108 @@ class DriverResponse(BaseModel):
     n_drivers: int = 0
 
 
+class SegmentationSpec(BaseModel):
+    """A saved latent class segmentation (categorical mixture model).
+
+    ``indicators`` are the variables the classes are built from. ``classes_mode``
+    is ``auto`` (the analysis suggests the number of classes by BIC, testing 2 to
+    ``max_classes``) or ``fixed`` (exactly ``n_classes``). ``variable_name`` is the
+    membership variable last saved from this segmentation, re-saved in place.
+    """
+
+    indicators: list[str] = Field(default_factory=list)
+    classes_mode: Literal["auto", "fixed"] = "auto"
+    n_classes: int = 3
+    max_classes: int = 6
+    weight: str | None = None
+    filter_id: str | None = None
+    variable_name: str = ""
+
+
+class SegmentationFitRow(BaseModel):
+    """Fit statistics for one candidate number of classes."""
+
+    k: int
+    log_likelihood: float
+    npar: int
+    aic: float
+    bic: float
+    entropy_r2: float | None = None  # None for a single class
+
+
+class SegmentClass(BaseModel):
+    """One class of the chosen solution (1 = largest)."""
+
+    number: int
+    size_pct: float  # model-based share of the base, 0..100
+
+
+class SegmentProfileRow(BaseModel):
+    """One answer category: its overall share and the share/index in each class."""
+
+    label: str
+    overall_pct: float
+    class_pcts: list[float]
+    class_index: list[float | None]  # class share / overall share × 100
+
+
+class SegmentProfile(BaseModel):
+    """The class profile for one indicator variable."""
+
+    name: str
+    label: str
+    rows: list[SegmentProfileRow]
+
+
+class SegmentationResponse(BaseModel):
+    """A computed segmentation: fit table, class sizes, and class profiles."""
+
+    k: int
+    k_mode: Literal["auto", "fixed"] = "auto"
+    fit: list[SegmentationFitRow]
+    classes: list[SegmentClass]
+    profiles: list[SegmentProfile]
+    entropy_r2: float | None = None
+    base_n: int
+    eff_base_n: float | None = None
+    excluded_missing: int = 0  # base respondents dropped for missing answers
+    classified_n: int = 0  # respondents assigned to a class
+    weighted: bool = False
+    weight_label: str | None = None
+    filter_label: str | None = None
+
+
+class SegmentationSaveRequest(BaseModel):
+    """Save the class membership of a segmentation as a categorical variable."""
+
+    spec: SegmentationSpec
+    new_label: str = "Segment"
+
+
+class SegmentationSaveResponse(BaseModel):
+    """The updated dataset, the saved variable's name, and the fitted result."""
+
+    meta: DatasetMeta
+    variable_name: str
+    result: SegmentationResponse
+
+
 class CrosstabNode(BaseModel):
-    """A node in the saved-crosstab tree: a folder, a crosstab, or a driver.
+    """A node in the saved-crosstab tree: a folder, a crosstab, a driver, or a
+    segmentation.
 
     Folders hold ``children``; a crosstab holds a ``spec``; a driver holds a
-    ``driver`` spec. ``version`` lets specs grow while older saves still load.
+    ``driver`` spec; a segmentation holds a ``segmentation`` spec. ``version``
+    lets specs grow while older saves still load.
     """
 
     id: str
     name: str
-    kind: Literal["folder", "crosstab", "driver"]
+    kind: Literal["folder", "crosstab", "driver", "segmentation"]
     children: list["CrosstabNode"] = Field(default_factory=list)
     spec: SavedCrosstabSpec | None = None
     driver: DriverSpec | None = None
+    segmentation: SegmentationSpec | None = None
     version: int = 1
 
 
@@ -853,11 +956,13 @@ class CrosstabsUpdate(BaseModel):
 
 
 class ExportTable(BaseModel):
-    """One item to write to an Excel sheet: a crosstab ``spec`` or a ``driver``."""
+    """One item to write to an Excel sheet: a crosstab ``spec``, a ``driver``, or a
+    ``segmentation``."""
 
     name: str
     spec: SavedCrosstabSpec | None = None
     driver: DriverSpec | None = None
+    segmentation: SegmentationSpec | None = None
 
 
 class ExportSheet(BaseModel):

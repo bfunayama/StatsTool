@@ -75,6 +75,14 @@ export interface RulesRecode {
   else_label: string | null
 }
 
+// Class membership from a saved segmentation: one entry per data row (class
+// number, or null where the respondent was not classified).
+export interface SegmentRecode {
+  kind: 'segment'
+  k: number
+  assignments: (number | null)[]
+}
+
 export type Recode =
   | BandRecode
   | BinaryRecode
@@ -84,6 +92,7 @@ export type Recode =
   | CodeAnyRecode
   | CountRecode
   | RulesRecode
+  | SegmentRecode
 
 export interface WeightCell {
   values: string[]
@@ -359,13 +368,73 @@ export interface DriverResponse {
   n_drivers: number
 }
 
+export interface SegmentationSpec {
+  indicators: string[]
+  classes_mode: 'auto' | 'fixed'
+  n_classes: number
+  max_classes: number
+  weight: string | null
+  filter_id: string | null
+  variable_name: string
+}
+
+export interface SegmentationFitRow {
+  k: number
+  log_likelihood: number
+  npar: number
+  aic: number
+  bic: number
+  entropy_r2: number | null
+}
+
+export interface SegmentClass {
+  number: number
+  size_pct: number
+}
+
+export interface SegmentProfileRow {
+  label: string
+  overall_pct: number
+  class_pcts: number[]
+  class_index: (number | null)[]
+}
+
+export interface SegmentProfile {
+  name: string
+  label: string
+  rows: SegmentProfileRow[]
+}
+
+export interface SegmentationResponse {
+  k: number
+  k_mode: 'auto' | 'fixed'
+  fit: SegmentationFitRow[]
+  classes: SegmentClass[]
+  profiles: SegmentProfile[]
+  entropy_r2: number | null
+  base_n: number
+  eff_base_n: number | null
+  excluded_missing: number
+  classified_n: number
+  weighted: boolean
+  weight_label: string | null
+  filter_label: string | null
+}
+
+export interface SegmentationSaveResponse {
+  meta: DatasetMeta
+  variable_name: string
+  result: SegmentationResponse
+}
+
 export interface CrosstabNode {
   id: string
   name: string
-  kind: 'folder' | 'crosstab' | 'driver'
+  kind: 'folder' | 'crosstab' | 'driver' | 'segmentation'
   children: CrosstabNode[]
   spec: SavedCrosstabSpec | null
   driver?: DriverSpec | null
+  segmentation?: SegmentationSpec | null
   version: number
 }
 
@@ -607,6 +676,26 @@ export function computeDrivers(
   return postJson(`/api/datasets/${id}/drivers`, spec)
 }
 
+export function computeSegmentation(
+  id: string,
+  spec: SegmentationSpec,
+): Promise<SegmentationResponse> {
+  return postJson(`/api/datasets/${id}/segmentation`, spec)
+}
+
+// Saves class membership as a categorical variable. Re-saving the same
+// spec.variable_name updates that variable in place.
+export function saveSegmentationVariable(
+  id: string,
+  spec: SegmentationSpec,
+  newLabel: string,
+): Promise<SegmentationSaveResponse> {
+  return postJson(`/api/datasets/${id}/segmentation/save`, {
+    spec,
+    new_label: newLabel,
+  })
+}
+
 export function getCombinations(
   id: string,
   variables: string[],
@@ -678,6 +767,7 @@ export interface ExportTable {
   name: string
   spec?: SavedCrosstabSpec | null
   driver?: DriverSpec | null
+  segmentation?: SegmentationSpec | null
 }
 
 export async function exportXlsx(

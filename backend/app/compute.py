@@ -24,6 +24,7 @@ from .models import (
     QuestionItem,
     QuestionKind,
     RulesRecode,
+    SegmentRecode,
     Variable,
     ValueAttribute,
     VariableType,
@@ -156,6 +157,9 @@ def compute_display_series(
     if isinstance(var.recode, RulesRecode):
         return _apply_rules(df, index, var.recode)
 
+    if isinstance(var.recode, SegmentRecode):
+        return _apply_segment(df, var.recode, var.values)
+
     if var.source_name is None:
         raw = _clean(df[var.name])
     else:
@@ -186,6 +190,24 @@ def _apply_values(raw: pd.Series, values: list[ValueAttribute]) -> pd.Series:
         return label_map.get(value, value)
 
     return raw.map(convert).astype("object")
+
+
+def _apply_segment(
+    df: pd.DataFrame, recode: SegmentRecode, values: list[ValueAttribute]
+) -> pd.Series:
+    """Class membership labels, stored per respondent row.
+
+    A respondent list that no longer matches the data (e.g. after a data refresh)
+    shows as missing rather than attaching classes to the wrong rows.
+    """
+    if len(recode.assignments) != len(df):
+        return pd.Series(pd.NA, index=df.index, dtype="object")
+    raw = pd.Series(
+        [None if a is None else str(a) for a in recode.assignments],
+        index=df.index,
+        dtype="object",
+    )
+    return _apply_values(raw, values)
 
 
 def _apply_bands(numbers: pd.Series, bands: list[Band]) -> pd.Series:

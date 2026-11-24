@@ -428,6 +428,7 @@ select {
 }
 .ct-tree-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
   padding: 0.5rem 0.6rem;
@@ -1042,6 +1043,9 @@ button.danger:hover:not(:disabled) {
 }
 .driver-results {
   margin-top: 1rem;
+}
+.segment-subhead {
+  margin: 1rem 0 0.25rem;
 }
 .driver-table td.num,
 .driver-table th.num {

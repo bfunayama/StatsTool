@@ -14,6 +14,7 @@ import pandas as pd
 
 from . import crosstab as crosstabbing
 from . import drivers as driving
+from . import segmentation as segmenting
 from .models import (
     CrosstabRequest,
     CrosstabResponse,
@@ -21,6 +22,7 @@ from .models import (
     DriverResponse,
     ExportSheet,
     SavedCrosstabSpec,
+    SegmentationResponse,
 )
 
 _METHOD_LABELS = {
@@ -114,6 +116,15 @@ def build_workbook(
                 except driving.DriverError as err:
                     ws.cell(r, 1, f"Could not build this analysis: {err}")
                     r += 1
+            elif table.segmentation is not None:
+                try:
+                    sres = segmenting.compute_segmentation(
+                        df, meta, table.segmentation
+                    )
+                    r = _render_segmentation(ws, sres, r)
+                except segmenting.SegmentationError as err:
+                    ws.cell(r, 1, f"Could not build this segmentation: {err}")
+                    r += 1
             elif table.spec is not None:
                 try:
                     result = crosstabbing.compute_crosstab(
@@ -178,6 +189,90 @@ def _render_driver(ws, result: DriverResponse, start_row: int) -> int:
     ws.cell(r, 1, caption)
     ws.column_dimensions["A"].width = 48
     return r + 1
+
+
+def _header_row(ws, row: int, headers: list[str]) -> None:
+    from openpyxl.styles import Alignment
+
+    for col, text in enumerate(headers, start=1):
+        c = ws.cell(row, col, text)
+        c.font = _bold()
+        if col > 1:
+            c.alignment = Alignment(horizontal="right")
+
+
+def _render_segmentation(ws, result: SegmentationResponse, start_row: int) -> int:
+    """Write a segmentation: class sizes, fit by number of classes, a profile table
+    per indicator, and a caption with the base and fit details."""
+    r = start_row
+
+    _header_row(ws, r, ["Class", "Size %"])
+    r += 1
+    for cls in result.classes:
+        ws.cell(r, 1, f"Class {cls.number}")
+        size = ws.cell(r, 2, round(cls.size_pct / 100.0, 4))
+        size.number_format = "0.0%"
+        r += 1
+    r += 1
+
+    _header_row(
+        ws,
+        r,
+        ["Classes", "Log-likelihood", "Parameters", "AIC", "BIC", "Entropy R²"],
+    )
+    r += 1
+    for fit in result.fit:
+        label = f"{fit.k} (chosen)" if fit.k == result.k else f"{fit.k}"
+        ws.cell(r, 1, label)
+        ws.cell(r, 2, round(fit.log_likelihood, 1))
+        ws.cell(r, 3, fit.npar)
+        ws.cell(r, 4, round(fit.aic, 1))
+        ws.cell(r, 5, round(fit.bic, 1))
+        if fit.entropy_r2 is not None:
+            ws.cell(r, 6, round(fit.entropy_r2, 3))
+        r += 1
+    r += 1
+
+    for profile in result.profiles:
+        ws.cell(r, 1, profile.label).font = _bold()
+        r += 1
+        headers = ["Answer", "Total %"]
+        for cls in result.classes:
+            headers += [f"Class {cls.number} %", f"Class {cls.number} index"]
+        _header_row(ws, r, headers)
+        r += 1
+        for row in profile.rows:
+            ws.cell(r, 1, row.label)
+            _percent_cell(ws, r, 2, row.overall_pct)
+            for i, (pct, idx) in enumerate(zip(row.class_pcts, row.class_index)):
+                _percent_cell(ws, r, 3 + 2 * i, pct)
+                if idx is not None:
+                    ws.cell(r, 4 + 2 * i, round(idx))
+            r += 1
+        r += 1
+
+    mode = "suggested by BIC" if result.k_mode == "auto" else "fixed"
+    caption = f"Latent class segmentation · {result.k} classes ({mode})"
+    if result.entropy_r2 is not None:
+        caption += f" · Entropy R² = {result.entropy_r2:.3f}"
+    caption += f" · Filter: {result.filter_label or 'None'}"
+    caption += (
+        f" · Weighted – {result.weight_label}" if result.weighted else " · Unweighted"
+    )
+    caption += f" · Base n = {result.base_n}"
+    if result.weighted and result.eff_base_n is not None:
+        caption += f" · Effective n = {round(result.eff_base_n)}"
+    caption += f" · Classified n = {result.classified_n}"
+    if result.excluded_missing > 0:
+        caption += f" · {result.excluded_missing} excluded for missing answers"
+    ws.cell(r, 1, caption)
+    ws.column_dimensions["A"].width = 48
+    return r + 1
+
+
+def _percent_cell(ws, row: int, col: int, pct: float) -> None:
+    cell = ws.cell(row, col, round(pct / 100.0, 4))
+    cell.number_format = "0.0%"
 
 
 def _render_table(

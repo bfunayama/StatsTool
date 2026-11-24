@@ -19,6 +19,7 @@ from . import (
     export as exporting,
     filters as filtering,
     ingest,
+    segmentation as segmenting,
     storage,
 )
 from .models import (
@@ -66,6 +67,11 @@ from .models import (
     RefreshReport,
     RulesRecode,
     RulesRequest,
+    SegmentationResponse,
+    SegmentationSaveRequest,
+    SegmentationSaveResponse,
+    SegmentationSpec,
+    SegmentRecode,
     TextCodeRequest,
     ValueAttribute,
     Variable,
@@ -957,6 +963,9 @@ def _variable_usages(meta: DatasetMeta, name: str) -> list[str]:
                 name in (drv.outcome, drv.weight) or name in drv.driver_variables
             ):
                 uses.append(f"driver '{node.name}'")
+            seg = node.segmentation
+            if seg is not None and (name == seg.weight or name in seg.indicators):
+                uses.append(f"segmentation '{node.name}'")
             walk(node.children)
 
     walk(meta.crosstabs)
@@ -1041,6 +1050,71 @@ def drivers(dataset_id: str, request: DriverSpec) -> DriverResponse:
         raise HTTPException(status_code=400, detail=str(err)) from err
 
 
+@app.post("/api/datasets/{dataset_id}/segmentation", response_model=SegmentationResponse)
+def segmentation(dataset_id: str, request: SegmentationSpec) -> SegmentationResponse:
+    """Fit a latent class segmentation over the chosen indicator variables."""
+    meta, df = _load(dataset_id)
+    try:
+        return segmenting.compute_segmentation(df, meta, request)
+    except segmenting.SegmentationError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
+@app.post(
+    "/api/datasets/{dataset_id}/segmentation/save",
+    response_model=SegmentationSaveResponse,
+)
+def save_segmentation(
+    dataset_id: str, payload: SegmentationSaveRequest
+) -> SegmentationSaveResponse:
+    """Save a segmentation's class membership as a categorical variable.
+
+    Re-saving updates the variable named in ``spec.variable_name`` in place (same
+    name), so repeated saves do not pile up copies.
+    """
+    meta, df = _load(dataset_id)
+    try:
+        result, classes = segmenting.segment_respondents(df, meta, payload.spec)
+    except segmenting.SegmentationError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+    label = payload.new_label.strip() or "Segment"
+    values = [
+        ValueAttribute(source_value=str(i), value=float(i), label=f"Class {i}")
+        for i in range(1, result.k + 1)
+    ]
+    recode = SegmentRecode(
+        k=result.k,
+        assignments=[int(c) if c > 0 else None for c in classes],
+    )
+    existing = next(
+        (
+            v
+            for v in meta.variables
+            if v.name == payload.spec.variable_name
+            and isinstance(v.recode, SegmentRecode)
+        ),
+        None,
+    )
+    if existing is not None:
+        existing.label = label
+        existing.values = values
+        existing.recode = recode
+        var = existing
+    else:
+        names = {v.name for v in meta.variables}
+        var = Variable(
+            name=compute.unique_name(label, names),
+            label=label,
+            type=VariableType.categorical,
+            values=values,
+            recode=recode,
+        )
+        meta.variables.append(var)
+    storage.save_meta(meta)
+    return SegmentationSaveResponse(meta=meta, variable_name=var.name, result=result)
+
+
 def _collect_node_ids(nodes: list[CrosstabNode], seen: set[str]) -> None:
     """Walk the crosstab tree, failing on duplicate ids or bad node shapes."""
     for node in nodes:
@@ -1056,6 +1130,11 @@ def _collect_node_ids(nodes: list[CrosstabNode], seen: set[str]) -> None:
         if node.kind == "driver" and node.driver is None:
             raise HTTPException(
                 status_code=400, detail=f"Driver '{node.name}' has no spec."
+            )
+        if node.kind == "segmentation" and node.segmentation is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Segmentation '{node.name}' has no spec.",
             )
         _collect_node_ids(node.children, seen)
 

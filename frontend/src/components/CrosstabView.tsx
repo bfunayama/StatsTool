@@ -24,8 +24,13 @@ import {
   type ExportTable,
   type Filter,
   type SavedCrosstabSpec,
+  type SegmentationSpec,
 } from '../api'
 import { DriverPanel, defaultDriverSpec } from './DriverPanel'
+import {
+  SegmentationPanel,
+  defaultSegmentationSpec,
+} from './SegmentationPanel'
 import { useBackdropDismiss } from '../useBackdropDismiss'
 
 interface Props {
@@ -627,6 +632,8 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   const driverNode =
     selectedNode && selectedNode.kind === 'driver' ? selectedNode : null
+  const segmentationNode =
+    selectedNode && selectedNode.kind === 'segmentation' ? selectedNode : null
 
   function autoName(): string {
     return colValue && colValue !== TOTAL
@@ -637,7 +644,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
   // Auto-save the builder: a valid new draft (Row chosen) creates a table node;
   // edits to an open table save into it. Debounced so bursts collapse.
   useEffect(() => {
-    if (driverNode || !builderSpec) return
+    if (driverNode || segmentationNode || !builderSpec) return
     const name = titleDraft.trim() || autoName()
     const t = setTimeout(() => {
       if (selectedId) {
@@ -692,6 +699,33 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   function saveDriverNode(node: CrosstabNode, name: string, spec: DriverSpec) {
     persistTree(updateNode(tree, node.id, { name, driver: spec }))
+  }
+
+  function selectSegmentation(node: CrosstabNode) {
+    setSelectedId(node.id)
+    setActiveFolderId(findParentId(tree, node.id, null) ?? null)
+  }
+
+  function newSegmentation() {
+    const node: CrosstabNode = {
+      id: crypto.randomUUID(),
+      name: 'Segmentation',
+      kind: 'segmentation',
+      children: [],
+      spec: null,
+      segmentation: defaultSegmentationSpec(),
+      version: 1,
+    }
+    persistTree(insertNode(tree, activeFolderId, node))
+    setSelectedId(node.id)
+  }
+
+  function saveSegmentationNode(
+    node: CrosstabNode,
+    name: string,
+    spec: SegmentationSpec,
+  ) {
+    persistTree(updateNode(tree, node.id, { name, segmentation: spec }))
   }
 
   function closeTable() {
@@ -779,6 +813,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
     for (const node of nodes) {
       if (node.kind === 'crosstab' && node.spec) out.push(node)
       else if (node.kind === 'driver' && node.driver) out.push(node)
+      else if (node.kind === 'segmentation' && node.segmentation) out.push(node)
       out.push(...collectCrosstabNodes(node.children))
     }
     return out
@@ -786,9 +821,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
 
   // A saved node becomes a crosstab table or a driver table for export.
   function nodeToTable(n: CrosstabNode): ExportTable {
-    return n.kind === 'driver'
-      ? { name: n.name, driver: n.driver }
-      : { name: n.name, spec: n.spec }
+    if (n.kind === 'driver') return { name: n.name, driver: n.driver }
+    if (n.kind === 'segmentation')
+      return { name: n.name, segmentation: n.segmentation }
+    return { name: n.name, spec: n.spec }
   }
 
   async function doExport(
@@ -816,7 +852,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
       for (const n of nodes) {
         if (n.kind === 'folder') walk(n.children, n.name)
         else if (
-          (n.spec || n.driver) &&
+          (n.spec || n.driver || n.segmentation) &&
           include(n.id)
         ) {
           const arr = groups.get(folder) ?? []
@@ -2460,7 +2496,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
                   ? setActiveFolderId(node.id)
                   : node.kind === 'driver'
                     ? selectDriver(node)
-                    : selectCrosstab(node)
+                    : node.kind === 'segmentation'
+                      ? selectSegmentation(node)
+                      : selectCrosstab(node)
               }
               onDoubleClick={() => startRename(node)}
               title={
@@ -2470,6 +2508,9 @@ export function CrosstabView({ meta, onChanged }: Props) {
               }
             >
               {node.kind === 'driver' && <span className="ct-node-tag">Driver</span>}
+              {node.kind === 'segmentation' && (
+                <span className="ct-node-tag">Segment</span>
+              )}
               {node.name}
             </button>
           )}
@@ -2506,6 +2547,12 @@ export function CrosstabView({ meta, onChanged }: Props) {
             title="Add a driver (relative importance) analysis"
           >
             + Driver
+          </button>
+          <button
+            onClick={newSegmentation}
+            title="Add a latent class segmentation"
+          >
+            + Segmentation
           </button>
           <button onClick={newFolder} title="New folder">
             + Folder
@@ -2572,6 +2619,16 @@ export function CrosstabView({ meta, onChanged }: Props) {
           name={driverNode.name}
           spec={driverNode.driver ?? defaultDriverSpec()}
           onSave={(nm, sp) => saveDriverNode(driverNode, nm, sp)}
+        />
+      ) : segmentationNode ? (
+        <SegmentationPanel
+          key={segmentationNode.id}
+          datasetId={meta.id}
+          meta={meta}
+          name={segmentationNode.name}
+          spec={segmentationNode.segmentation ?? defaultSegmentationSpec()}
+          onSave={(nm, sp) => saveSegmentationNode(segmentationNode, nm, sp)}
+          onChanged={onChanged}
         />
       ) : (
       <div className="ct-main">
