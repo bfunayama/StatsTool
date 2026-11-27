@@ -22,6 +22,7 @@ import {
   type Band,
   type CoalescePreview,
   type CodeAnyRecode,
+  type CrosstabNode,
   type DatasetMeta,
   type DistinctValue,
   type PickAnyCompactPreview,
@@ -33,6 +34,7 @@ import {
   type VariableType,
 } from '../api'
 import { useBackdropDismiss } from '../useBackdropDismiss'
+import { derivedSources, originalSources } from './variableSources'
 
 interface Props {
   meta: DatasetMeta
@@ -460,6 +462,8 @@ export function VariableEditor({ meta, onChanged }: Props) {
                   <QuestionRow
                     key={key}
                     question={q}
+                    variables={variables}
+                    nodes={meta.crosstabs}
                     isOpen={isOpen}
                     onToggle={() => setExpanded(isOpen ? null : key)}
                     onLabel={(label) => patchQuestion(q.id, { label })}
@@ -489,6 +493,8 @@ export function VariableEditor({ meta, onChanged }: Props) {
                 <VariableRow
                   key={v.name}
                   variable={v}
+                  variables={variables}
+                  nodes={meta.crosstabs}
                   datasetId={meta.id}
                   isOpen={isOpen}
                   dirty={false}
@@ -657,6 +663,8 @@ export function VariableEditor({ meta, onChanged }: Props) {
 
 interface RowProps {
   variable: Variable
+  variables: Variable[]
+  nodes: CrosstabNode[]
   datasetId: string
   isOpen: boolean
   dirty: boolean
@@ -677,6 +685,8 @@ interface RowProps {
 
 function QuestionRow({
   question,
+  variables,
+  nodes,
   isOpen,
   onToggle,
   onLabel,
@@ -689,6 +699,8 @@ function QuestionRow({
   onDelete,
 }: {
   question: Question
+  variables: Variable[]
+  nodes: CrosstabNode[]
   isOpen: boolean
   onToggle: () => void
   onLabel: (label: string) => void
@@ -815,6 +827,11 @@ function QuestionRow({
                   Scale: {question.categories.join(' · ')}
                 </p>
               )}
+              <SourceFootnote
+                members={variables.filter((v) => question.items.some((item) => item.column === v.name))}
+                variables={variables}
+                nodes={nodes}
+              />
             </div>
           </td>
         </tr>
@@ -862,6 +879,8 @@ function AxisEditor({
 
 function VariableRow({
   variable,
+  variables,
+  nodes,
   datasetId,
   isOpen,
   dirty,
@@ -1010,10 +1029,42 @@ function VariableRow({
             ) : (
               <RawValuesView datasetId={datasetId} variableName={variable.name} />
             )}
+            <SourceFootnote members={[variable]} variables={variables} nodes={nodes} />
           </td>
         </tr>
       )}
     </>
+  )
+}
+
+function SourceFootnote({
+  members,
+  variables,
+  nodes,
+}: {
+  members: Variable[]
+  variables: Variable[]
+  nodes: CrosstabNode[]
+}) {
+  const derived = members.filter((v) => v.source_name || v.recode || v.weighting)
+  if (derived.length === 0) return null
+  const sources = [...new Set(derived.flatMap((v) => derivedSources(v, nodes)))]
+  const originals = originalSources(sources, variables, nodes)
+  const label = (name: string) => {
+    const variable = variables.find((v) => v.name === name)
+    return variable?.label && variable.label !== name
+      ? `${variable.label} (${name})`
+      : name
+  }
+  return (
+    <div className="muted variable-source-footnote">
+      <strong>Derived from:</strong>
+      {originals.length > 0 ? (
+        <ul>{originals.map((name) => <li key={name}>{label(name)}</li>)}</ul>
+      ) : (
+        <> Source variables were not recorded for this derived variable.</>
+      )}
+    </div>
   )
 }
 

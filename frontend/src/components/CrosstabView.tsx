@@ -32,6 +32,7 @@ import {
   defaultSegmentationSpec,
 } from './SegmentationPanel'
 import { useBackdropDismiss } from '../useBackdropDismiss'
+import { convertNetToMerge, groupSelectedHeaders } from './crosstabGroups'
 
 interface Props {
   meta: DatasetMeta
@@ -2011,21 +2012,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
     if (source === target) return
     const groups = dim === 'row' ? rowGroups : columnGroups
     const setGroups = dim === 'row' ? setRowGroups : setColumnGroups
-    const order = dim === 'row' ? rowOrder : colOrder
     // Dragging a member of a multi-selection merges the whole selection.
     const sel = dim === 'row' ? selRows : selCols
     if (sel.size >= 2 && sel.has(source)) {
-      const tg = groups.find((g) => g.label === target)
-      if (tg) {
-        let next = tg
-        for (const m of sel) next = withMember(next, m, order)
-        setGroups(groups.map((g) => (g.id === tg.id ? next : g)))
-      } else {
-        createGroupFromMembers(dim, [...sel, target], 'merge')
-      }
-      clearSel(dim)
+      createGroupFromMembers(dim, [...sel, target], 'merge')
       return
     }
+    const order = dim === 'row' ? rowOrder : colOrder
     const sg = groups.find((g) => g.label === source)
     const tg = groups.find((g) => g.label === target)
     if (!sg && !tg) {
@@ -2188,6 +2181,13 @@ export function CrosstabView({ meta, onChanged }: Props) {
   }
 
   function toggleGroupMode(dim: 'row' | 'col', label: string) {
+    const groups = dim === 'row' ? rowGroups : columnGroups
+    const setGroups = dim === 'row' ? setRowGroups : setColumnGroups
+    const selected = groups.find((group) => group.label === label)
+    if (selected?.mode === 'net') {
+      setGroups(convertNetToMerge(groups, selected))
+      return
+    }
     const order = dim === 'row' ? rowOrder : colOrder
     const flip = (g: CrosstabGroup): CrosstabGroup => {
       if (g.label !== label) return g
@@ -2195,8 +2195,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
       const wasAuto = g.label === autoLabel(g.members, g.mode, order)
       return { ...g, mode, label: wasAuto ? autoLabel(g.members, mode, order) : g.label }
     }
-    if (dim === 'row') setRowGroups(rowGroups.map(flip))
-    else setColumnGroups(columnGroups.map(flip))
+    setGroups(groups.map(flip))
   }
 
   function dispRow(l: string): string {
@@ -2216,7 +2215,10 @@ export function CrosstabView({ meta, onChanged }: Props) {
     const setSel = dim === 'row' ? setSelRows : setSelCols
     const anchor = dim === 'row' ? anchorRow : anchorCol
     const setAnchor = dim === 'row' ? setAnchorRow : setAnchorCol
-    const order = dim === 'row' ? rowOrder : colOrder
+    const labels = dim === 'row'
+      ? visRowIdx.map((i) => result!.row_labels[i])
+      : visColIdx.map((i) => result!.columns[i].label)
+    const order = new Map(labels.map((item, index) => [item, index]))
     if (e.shiftKey && anchor && order.has(anchor) && order.has(label)) {
       const a = order.get(anchor) as number
       const b = order.get(label) as number
@@ -2255,12 +2257,14 @@ export function CrosstabView({ meta, onChanged }: Props) {
     if (members.length < 2) return
     const groups = dim === 'row' ? rowGroups : columnGroups
     const setGroups = dim === 'row' ? setRowGroups : setColumnGroups
-    const order = dim === 'row' ? rowOrder : colOrder
+    const labels = dim === 'row'
+      ? visRowIdx.map((i) => result!.row_labels[i])
+      : visColIdx.map((i) => result!.columns[i].label)
+    const order = new Map(labels.map((item, index) => [item, index]))
     const ordered = [...new Set(members)].sort(
       (a, b) => (order.get(a) ?? 1e9) - (order.get(b) ?? 1e9),
     )
-    const label = uniqueGroupLabel(autoLabel(ordered, mode, order), groups)
-    setGroups([...groups, { id: crypto.randomUUID(), label, members: ordered, mode }])
+    setGroups(groupSelectedHeaders(groups, ordered, mode, crypto.randomUUID()))
     clearSel(dim)
   }
 
@@ -3140,7 +3144,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       onDragLeave={() => onHeaderDragLeave(key)}
                       onDrop={(e) => onHeaderDrop(e, 'col', ci, 'h', true)}
                       onClick={(e) => {
-                        if (!editing && !isGroup) selectHeader('col', c.label, e)
+                        if (!editing) selectHeader('col', c.label, e)
                       }}
                       onContextMenu={(e) => openHeaderMenu('col', c.label, e)}
                     >
@@ -3197,7 +3201,7 @@ export function CrosstabView({ meta, onChanged }: Props) {
                       onDragLeave={() => onHeaderDragLeave(key)}
                       onDrop={(e) => onHeaderDrop(e, 'row', ri, 'v', true)}
                       onClick={(e) => {
-                        if (!editing && !isGroup) selectHeader('row', label, e)
+                        if (!editing) selectHeader('row', label, e)
                       }}
                       onContextMenu={(e) => openHeaderMenu('row', label, e)}
                     >

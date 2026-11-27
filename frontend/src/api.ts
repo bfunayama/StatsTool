@@ -81,6 +81,7 @@ export interface SegmentRecode {
   kind: 'segment'
   k: number
   assignments: (number | null)[]
+  sources?: string[]
 }
 
 export type Recode =

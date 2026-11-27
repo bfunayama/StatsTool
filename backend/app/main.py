@@ -1086,6 +1086,7 @@ def save_segmentation(
     recode = SegmentRecode(
         k=result.k,
         assignments=[int(c) if c > 0 else None for c in classes],
+        sources=payload.spec.indicators,
     )
     existing = next(
         (

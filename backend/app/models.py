@@ -160,6 +160,7 @@ class SegmentRecode(BaseModel):
     kind: Literal["segment"] = "segment"
     k: int = 0
     assignments: list[int | None] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
 
 
 Recode = Annotated[

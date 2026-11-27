@@ -86,3 +86,31 @@ Then open http://localhost:5173 in your browser.
 - Stop either server with Ctrl+C.
 - Both auto-reload on code changes (uvicorn `--reload`, Vite HMR).
 - Datasets are stored locally under `data/datasets/`.
+
+### Crosstab weighting
+
+When a crosstab uses a weight, respondent weights are calculated on the full
+dataset before applying the table filter. Filtering retains those weights without
+re-raking or renormalising them. Equivalent respondent subsets therefore produce
+the same weighted results whether selected through a filter or a table column.
+This applies to standard crosstabs, grid and correlation tables, and Excel exports.
+Weighted bases are sums of respondent weights, not actual respondent counts.
+
+### Derived variable sources
+
+Expand a derived variable with **View** or the expand arrow to see a source
+footnote beneath its values. It lists only the original source variable names
+and labels, tracing through intermediate derived inputs and removing duplicates.
+Derived grouped variables show the same footnote beneath their member list.
+Segmentation source indicators are recorded when saving a membership variable;
+older variables use their linked saved segmentation where available, or explicitly
+show that the source variables were not recorded.
+
+### Filtering Pick Any questions
+
+The filter condition variable dropdown groups Pick Any options under their
+question. Choose an option (for example **None of the above**) and use **is
+selected** or **is not selected**. Conditions can be combined with AND/OR to
+match several options. These filters also work in rule-based variable creation.
+Selecting an option tests its non-missing member value, as in Pick Any crosstabs;
+**is not selected** includes respondents with no answer to the question.

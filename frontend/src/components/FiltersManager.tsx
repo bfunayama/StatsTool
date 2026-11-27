@@ -10,6 +10,7 @@ import {
   type Operator,
   type Variable,
 } from '../api'
+import { pickAnyFilterGroups } from './filterVariables'
 
 interface Props {
   meta: DatasetMeta
@@ -313,6 +314,9 @@ export function ConditionRow({
     [meta.variables, condition.variable],
   )
   const ops = operatorsFor(variable?.type ?? 'categorical')
+  const pickAnyGroups = pickAnyFilterGroups(meta, condition.variable)
+  const pickAnyMembers = new Set(pickAnyGroups.flatMap((group) => group.items.map((item) => item.column)))
+  const isPickAny = pickAnyMembers.has(condition.variable)
   const needsValues =
     condition.operator === 'in' || condition.operator === 'not_in'
 
@@ -353,7 +357,7 @@ export function ConditionRow({
     const type = v?.type ?? 'categorical'
     onChange({
       variable: name,
-      operator: type === 'numeric' ? 'ge' : 'in',
+      operator: pickAnyMembers.has(name) ? 'not_missing' : type === 'numeric' ? 'ge' : 'in',
       values: [],
       number: null,
       number2: null,
@@ -385,24 +389,39 @@ export function ConditionRow({
     <div className="condition">
       <div className="condition-head">
         <select
+          aria-label="Condition variable"
           value={condition.variable}
           onChange={(e) => pickVariable(e.target.value)}
         >
           {meta.variables
-            .filter((v) => !v.hidden || v.name === condition.variable)
+            .filter((v) => (!v.hidden || v.name === condition.variable) && !pickAnyMembers.has(v.name))
             .map((v) => (
               <option key={v.name} value={v.name}>
                 {v.label}
               </option>
             ))}
+          {pickAnyGroups.map(({ question, items }) => (
+            <optgroup key={question.id} label={`Pick Any: ${question.label}`}>
+              {items.map((item) => (
+                <option key={item.column} value={item.column}>
+                  {question.label} — {item.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
         </select>
         <select
+          aria-label="Condition operator"
           value={condition.operator}
           onChange={(e) => onChange({ operator: e.target.value as Operator })}
         >
           {ops.map((op) => (
             <option key={op} value={op}>
-              {OP_LABEL[op]}
+              {isPickAny && op === 'not_missing'
+                ? 'is selected'
+                : isPickAny && op === 'is_missing'
+                  ? 'is not selected'
+                  : OP_LABEL[op]}
             </option>
           ))}
         </select>

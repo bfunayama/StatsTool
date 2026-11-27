@@ -69,29 +69,32 @@ def compute_crosstab(
 ) -> CrosstabResponse:
     index = compute.build_index(meta.variables)
 
+    weights = None
+    if request.weight:
+        weight_var = index.get(request.weight)
+        if weight_var is None:
+            raise CrosstabError(f"Unknown weight variable: {request.weight}")
+        weights = compute.compute_weights(df, index, weight_var)
+
     if request.filter_id:
         saved = next((f for f in meta.filters if f.id == request.filter_id), None)
         if saved is None:
             raise CrosstabError("Filter not found.")
         mask = filtering.evaluate_filter(df, index, saved)
         df = df[mask]
+        if weights is not None:
+            weights = weights.loc[df.index]
 
     # Correlation mode: Pearson r between two numeric operands (each a single
     # numeric variable or a grid question's items), using a pairwise base.
     if request.correlation:
-        return _correlation_response(df, index, meta, request)
+        return _correlation_response(df, index, meta, request, weights)
 
     # A grid question on the row axis is its own 2-D table (items × shared scale);
     # the scale occupies the column axis, so the banner/column is ignored.
     if request.row.kind == "question":
         grid_q = next((q for q in meta.questions if q.id == request.row.ref), None)
         if grid_q is not None and grid_q.kind is QuestionKind.grid:
-            weights = None
-            if request.weight:
-                wv = index.get(request.weight)
-                if wv is None:
-                    raise CrosstabError(f"Unknown weight variable: {request.weight}")
-                weights = compute.compute_weights(df, index, wv)
             return _grid_response(df, index, grid_q, weights)
 
     # Banner columns (side-by-side segments, optionally two levels deep).
@@ -139,13 +142,6 @@ def compute_crosstab(
         row_valid = row_series.notna()
         row_kind = "variable"
     rows = _apply_groups(rows, request.row_groups, df.index)
-
-    weights = None
-    if request.weight:
-        weight_var = index.get(request.weight)
-        if weight_var is None:
-            raise CrosstabError(f"Unknown weight variable: {request.weight}")
-        weights = compute.compute_weights(df, index, weight_var)
 
     return _assemble(
         df.index,
@@ -343,7 +339,11 @@ def _corr_significant(r: float | None, n: int) -> bool:
 
 
 def _correlation_response(
-    df: pd.DataFrame, index, meta: DatasetMeta, request: CrosstabRequest
+    df: pd.DataFrame,
+    index,
+    meta: DatasetMeta,
+    request: CrosstabRequest,
+    weights: pd.Series | None,
 ) -> CrosstabResponse:
     """Pearson r matrix between two numeric operands (grid items or variables).
 
@@ -360,13 +360,6 @@ def _correlation_response(
     col_series, col_labels = _corr_operand(df, index, meta, col_kind, col_ref)
     # Self-matrix: same operand on both axes, so its diagonal is a trivial r = 1.
     is_self = col_kind == request.row.kind and col_ref == request.row.ref
-
-    weights = None
-    if request.weight:
-        wv = index.get(request.weight)
-        if wv is None:
-            raise CrosstabError(f"Unknown weight variable: {request.weight}")
-        weights = compute.compute_weights(df, index, wv)
 
     cells: list[list[CrosstabCell]] = []
     for i, rs in enumerate(row_series):
@@ -753,4 +746,3 @@ def _add_significance(
                             beaten.append(letter)
                 if beaten:
                     cells[ri][ci].sig_higher = beaten
-

@@ -63,7 +63,8 @@ each a 5-point grid over the same features) into per-feature Kano **category** v
 - [ ] **Dynamic window sizing + viewport-safe Row/Column dropdowns** — make crosstab builder
   layout respond cleanly to window size changes, and prevent Row/Column dropdown menus from
   extending past the viewport.
-- [ ] **Merge merged groups** — allow merging multiple existing merged groups in crosstabs.
+- [x] **Merge merged groups** — select existing groups with other rows or simple
+  columns to merge, NET, or hide them together.
 - [ ] **Right-click rename in crosstabs** — add a **Rename** action to the crosstab
   right-click context menu.
 - [ ] **Remove and rebase crosstab columns** - add a right-click **Remove** option that
